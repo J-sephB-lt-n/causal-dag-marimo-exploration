@@ -214,7 +214,7 @@ def _(g, include_var__ability_motivation, include_var__test_scores, json, mo):
                 'text-valign': 'center',
                 'text-halign': 'center',
 
-                'font-size': 13,
+                'font-size': 25,
                 'font-weight': 500,
 
                 'padding': '14px',
@@ -271,7 +271,7 @@ def _(g, include_var__ability_motivation, include_var__test_scores, json, mo):
 
                 'line-color': '#6b7280',
 
-                'target-arrow-color': '#6b7280',
+                'target-arrow-color': '#ffffff',
                 'target-arrow-shape': 'triangle',
 
                 'arrow-scale': 1.1,
@@ -355,7 +355,7 @@ def _(g, include_var__ability_motivation, include_var__test_scores, json, mo):
     </html>
     """
 
-    mo.iframe(html, height="640px")
+    mo.iframe(html, height="600px")
     return
 
 
