@@ -18,23 +18,29 @@ def _():
 
     import marimo as mo
     import networkx as nx
+    from pgmpy.base import DAG
 
-    return json, mo, nx
+    return DAG, json, mo, nx
 
 
 @app.cell
-def _(nx):
+def _(DAG, nx):
     g = nx.DiGraph()
 
     nodes = {
         "ability_motivation": "Ability/Motivation",
         "family_ses": "Family Socio-Economic Status",
         "education": "Formal Education",
+        "parents_education": "Parents Education Level",
+        "family_wealth": "Family Wealtth",
         "income": "Income",
         "profess_network": "Access to Professional Network",
         "survey_participation": "Survey participation",
         "occupation": "Occupation",
         "test_scores": "Test Scores",
+        "location": "Location",
+        "work_experience": "Years of Work Experience",
+        "field_of_study": "Field of Study",
     }
 
     g.add_nodes_from(nodes.keys())
@@ -59,7 +65,9 @@ def _(nx):
 
     # Verify DAG
     print("Is DAG:", nx.is_directed_acyclic_graph(g))
-    return (g,)
+
+    pgmpy_dag = DAG(g)
+    return g, pgmpy_dag
 
 
 @app.cell(hide_code=True)
@@ -80,17 +88,17 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    include_var__ability_motivation = mo.ui.checkbox(label="Ability/Motivation")
+    include_var__family_ses = mo.ui.checkbox(label="Family Socio-Economic Status")
     include_var__test_scores = mo.ui.checkbox(label="Test Scores")
 
     mo.vstack(
         [
             mo.md("## Variables to Include in Model"),
-            include_var__ability_motivation,
+            include_var__family_ses,
             include_var__test_scores,
         ]
     )
-    return include_var__ability_motivation, include_var__test_scores
+    return include_var__family_ses, include_var__test_scores
 
 
 @app.cell(column=2, hide_code=True)
@@ -102,10 +110,10 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(g, include_var__ability_motivation, include_var__test_scores, json, mo):
+def _(g, include_var__family_ses, include_var__test_scores, json, mo):
     nodes_included_in_model = set()
     for vbl_name, checkbox in (
-        ("ability_motivation", include_var__ability_motivation),
+        ("family_ses", include_var__family_ses),
         ("test_scores", include_var__test_scores),
     ):
         if checkbox.value:
@@ -364,8 +372,17 @@ def _():
     return
 
 
-@app.cell(column=3)
-def _():
+@app.cell(column=3, hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # Testable Implications
+    """)
+    return
+
+
+@app.cell
+def _(pgmpy_dag):
+    print(pgmpy_dag.get_independencies())
     return
 
 
