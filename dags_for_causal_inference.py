@@ -30,7 +30,8 @@ def _(DAG, nx):
     nodes = {
         "ability_motivation": "Ability/Motivation",
         "family_ses": "Family Socio-Economic Status",
-        "education": "Formal Education",
+        "education_level": "Formal Education Level Attained",
+        "education_institution": "Most Recent Education Institution Attended",
         "parents_education": "Parents Education Level",
         "family_wealth": "Family Wealtth",
         "income": "Income",
@@ -40,13 +41,13 @@ def _(DAG, nx):
         "test_scores": "Test Scores",
         "location": "Location",
         "work_experience": "Years of Work Experience",
-        "field_of_study": "Field of Study",
     }
 
     g.add_nodes_from(nodes.keys())
 
     # Add directed edges
     edges = [
+        # --- Family background ---
         (
             "parents_education",
             "family_wealth",
@@ -58,7 +59,7 @@ def _(DAG, nx):
         ),
         (
             "parents_education",
-            "education",
+            "education_level",
             {
                 "rationale": (
                     "Educated parents are more likely to value, support, and finance their children's education"
@@ -66,12 +67,29 @@ def _(DAG, nx):
             },
         ),
         (
-            "family_wealth",
-            "education",
+            "parents_education",
+            "education_institution",
             {
                 "rationale": (
-                    "Wealthier families can better afford tuition, books, relocation, "
-                    "and reduced financial pressure during study"
+                    "Educated parents may help children access higher-quality or better-matched educational institutions"
+                )
+            },
+        ),
+        (
+            "family_wealth",
+            "education_level",
+            {
+                "rationale": (
+                    "Wealthier families can better afford tuition, books, relocation, and reduced financial pressure during study"
+                )
+            },
+        ),
+        (
+            "family_wealth",
+            "education_institution",
+            {
+                "rationale": (
+                    "Wealthier families can better access prestigious, distant, or higher-quality institutions"
                 )
             },
         ),
@@ -80,8 +98,7 @@ def _(DAG, nx):
             "income",
             {
                 "rationale": (
-                    "Family wealth can directly influence adult income through inheritance, "
-                    "financial safety nets, and investment opportunities"
+                    "Family wealth can directly influence adult income through inheritance, financial safety nets, and investment opportunities"
                 )
             },
         ),
@@ -97,11 +114,19 @@ def _(DAG, nx):
         ),
         (
             "ability_motivation",
-            "education",
+            "education_level",
             {
                 "rationale": (
-                    "More motivated and academically capable individuals are more likely "
-                    "to pursue and complete higher levels of education"
+                    "More motivated and academically capable individuals are more likely to pursue and complete higher levels of education"
+                )
+            },
+        ),
+        (
+            "ability_motivation",
+            "education_institution",
+            {
+                "rationale": (
+                    "More capable or motivated individuals may gain admission to better institutions or choose stronger educational paths"
                 )
             },
         ),
@@ -110,38 +135,44 @@ def _(DAG, nx):
             "income",
             {
                 "rationale": (
-                    "Ability and motivation can independently improve labor productivity "
-                    "and career success beyond formal education"
+                    "Ability and motivation can independently improve labor productivity and career success beyond formal education"
                 )
             },
         ),
         (
             "test_scores",
-            "education",
+            "education_level",
             {
                 "rationale": (
-                    "Strong academic performance increases admission chances and progression "
-                    "through educational systems"
+                    "Strong academic performance increases admission chances and progression through educational systems"
                 )
             },
         ),
         (
             "test_scores",
-            "income",
+            "education_institution",
             {
                 "rationale": (
-                    "Test scores may proxy for cognitive skills valued in the labor market"
+                    "Higher test scores can improve access to more selective or higher-quality institutions"
                 )
             },
         ),
         # --- Geography and local opportunity structure ---
         (
             "location",
-            "education",
+            "education_level",
             {
                 "rationale": (
-                    "Location affects access to schools, universities, educational quality, "
-                    "and educational policy environments"
+                    "Location affects access to schools, universities, educational quality, and educational policy environments"
+                )
+            },
+        ),
+        (
+            "location",
+            "education_institution",
+            {
+                "rationale": (
+                    "Location shapes which institutions are available and how costly it is to attend them"
                 )
             },
         ),
@@ -150,8 +181,7 @@ def _(DAG, nx):
             "income",
             {
                 "rationale": (
-                    "Regional labor markets differ in wages, industry composition, "
-                    "and economic opportunity"
+                    "Regional labor markets differ in wages, industry composition, and economic opportunity"
                 )
             },
         ),
@@ -164,81 +194,95 @@ def _(DAG, nx):
                 )
             },
         ),
-        # --- Education pathways and labor market mechanisms ---
         (
-            "education",
-            "field_of_study",
+            "location",
+            "survey_participation",
             {
                 "rationale": (
-                    "Individuals typically select a field of study within the broader educational system"
+                    "Survey accessibility and response rates often vary by geographic region"
                 )
             },
         ),
+        # --- Education pathways and labor market mechanisms ---
         (
-            "education",
+            "education_level",
             "occupation",
             {
                 "rationale": (
-                    "Educational attainment influences access to occupations requiring credentials "
-                    "or specialized knowledge"
+                    "Educational attainment influences access to occupations requiring credentials or specialized knowledge"
                 )
             },
         ),
         (
-            "education",
+            "education_level",
             "profess_network",
             {
                 "rationale": (
-                    "Educational institutions provide access to alumni, peers, mentors, "
-                    "and professional networking opportunities"
+                    "Longer educational exposure can expand access to peers, mentors, and alumni networks"
                 )
             },
         ),
         (
-            "education",
+            "education_level",
             "work_experience",
             {
                 "rationale": (
-                    "Education affects career timing, labor market entry, "
-                    "and opportunities for skill accumulation"
+                    "Education affects career timing, labor market entry, and opportunities for skill accumulation"
                 )
             },
         ),
         (
-            "education",
+            "education_level",
             "income",
             {
                 "rationale": (
-                    "Formal education increases human capital, credentials, "
-                    "and access to higher-paying jobs"
+                    "Formal education increases human capital, credentials, and access to higher-paying jobs"
                 )
             },
         ),
         (
-            "field_of_study",
+            "education_level",
+            "survey_participation",
+            {
+                "rationale": (
+                    "Educational attainment may affect willingness or ability to participate in surveys"
+                )
+            },
+        ),
+        (
+            "education_institution",
             "occupation",
             {
                 "rationale": (
-                    "Field of study strongly influences career specialization and occupational sorting"
+                    "Institution quality, prestige, and recruiting pipelines can shape occupational sorting"
                 )
             },
         ),
         (
-            "field_of_study",
-            "income",
+            "education_institution",
+            "profess_network",
             {
                 "rationale": (
-                    "Different academic disciplines are associated with different average earnings"
+                    "Educational institutions provide access to alumni, peers, mentors, and professional networking opportunities"
                 )
             },
         ),
+        (
+            "education_institution",
+            "income",
+            {
+                "rationale": (
+                    "Institution quality, reputation, and access to recruiting channels can affect later earnings"
+                )
+            },
+        ),
+        # --- Labor-market mediators ---
         (
             "profess_network",
             "occupation",
             {
                 "rationale": (
-                    "Professional networks help individuals obtain information, referrals, "
-                    "and job opportunities"
+                    "Professional networks help individuals obtain information, referrals, and job opportunities"
                 )
             },
         ),
@@ -247,8 +291,7 @@ def _(DAG, nx):
             "income",
             {
                 "rationale": (
-                    "Networks can improve promotion prospects, bargaining power, "
-                    "and access to higher-paying positions"
+                    "Networks can improve promotion prospects, bargaining power, and access to higher-paying positions"
                 )
             },
         ),
@@ -266,38 +309,17 @@ def _(DAG, nx):
             "income",
             {
                 "rationale": (
-                    "Additional years of work experience increase skills, productivity, "
-                    "and wages over time"
+                    "Additional years of work experience increase skills, productivity, and wages over time"
                 )
             },
         ),
         # --- Survey selection mechanisms ---
         (
-            "education",
-            "survey_participation",
-            {
-                "rationale": (
-                    "Educational attainment may affect willingness or ability "
-                    "to participate in surveys"
-                )
-            },
-        ),
-        (
             "income",
             "survey_participation",
             {
                 "rationale": (
-                    "Income may influence survey participation through time availability, "
-                    "trust, or accessibility"
-                )
-            },
-        ),
-        (
-            "location",
-            "survey_participation",
-            {
-                "rationale": (
-                    "Survey accessibility and response rates often vary by geographic region"
+                    "Income may influence survey participation through time availability, trust, or accessibility"
                 )
             },
         ),
@@ -535,12 +557,12 @@ def _(g, include_var__family_ses, include_var__test_scores, json, mo):
                  'label': '',
                  'font-size': 25,
                  'color': '#f3f4f6',
- 
+
                  'text-background-color': '#111827',
                  'text-background-opacity': 0.9,
                  'text-background-padding': 6,
                  'text-background-shape': 'roundrectangle',
- 
+
                  'text-wrap': 'wrap',
                  'text-max-width': 260,
               }}
@@ -553,10 +575,10 @@ def _(g, include_var__family_ses, include_var__test_scores, json, mo):
                selector: 'edge.hover',
                style: {{
                  'label': 'data(rationale)',
- 
+
                  'line-color': '#93c5fd',
                  'target-arrow-color': '#93c5fd',
- 
+
                  'width': 3,
                  'z-index': 999,
                }}
@@ -637,7 +659,7 @@ def _(g, include_var__family_ses, include_var__test_scores, json, mo):
          cy.on('mouseover', 'edge', (e) => {{
            e.target.addClass('hover');
          }});
- 
+
          cy.on('mouseout', 'edge', (e) => {{
            e.target.removeClass('hover');
          }});
