@@ -29,7 +29,6 @@ def _(DAG, nx):
 
     nodes = {
         "ability_motivation": "Ability/Motivation",
-        "family_ses": "Family Socio-Economic Status",
         "education_level": "Formal Education Level Attained",
         "education_institution": "Most Recent Education Institution Attended",
         "parents_education": "Parents Education Level",
@@ -38,9 +37,8 @@ def _(DAG, nx):
         "profess_network": "Access to Professional Network",
         "survey_participation": "Survey participation",
         "occupation": "Occupation",
-        "test_scores": "Test Scores",
+        "test_scores": "Most Recent Test Scores",
         "location": "Location",
-        "work_experience": "Years of Work Experience",
     }
 
     g.add_nodes_from(nodes.keys())
@@ -71,7 +69,7 @@ def _(DAG, nx):
             "education_institution",
             {
                 "rationale": (
-                    "Educated parents may help children access higher-quality or better-matched educational institutions"
+                    "Educated parents are more likely to prioritize academics differently, have preferences for specific schools, and are likely to be more comfortable and experienced navigating admissions processes."
                 )
             },
         ),
@@ -126,7 +124,7 @@ def _(DAG, nx):
             "education_institution",
             {
                 "rationale": (
-                    "More capable or motivated individuals may gain admission to better institutions or choose stronger educational paths"
+                    "More capable or motivated individuals may gain admission to better institutions will likely prioritize different schools"
                 )
             },
         ),
@@ -136,24 +134,6 @@ def _(DAG, nx):
             {
                 "rationale": (
                     "Ability and motivation can independently improve labor productivity and career success beyond formal education"
-                )
-            },
-        ),
-        (
-            "test_scores",
-            "education_level",
-            {
-                "rationale": (
-                    "Strong academic performance increases admission chances and progression through educational systems"
-                )
-            },
-        ),
-        (
-            "test_scores",
-            "education_institution",
-            {
-                "rationale": (
-                    "Higher test scores can improve access to more selective or higher-quality institutions"
                 )
             },
         ),
@@ -224,19 +204,10 @@ def _(DAG, nx):
         ),
         (
             "education_level",
-            "work_experience",
-            {
-                "rationale": (
-                    "Education affects career timing, labor market entry, and opportunities for skill accumulation"
-                )
-            },
-        ),
-        (
-            "education_level",
             "income",
             {
                 "rationale": (
-                    "Formal education increases human capital, credentials, and access to higher-paying jobs"
+                    "Formal education increases access to higher-paying jobs"
                 )
             },
         ),
@@ -246,6 +217,15 @@ def _(DAG, nx):
             {
                 "rationale": (
                     "Educational attainment may affect willingness or ability to participate in surveys"
+                )
+            },
+        ),
+        (
+            "education_institution",
+            "education_level",
+            {
+                "rationale": (
+                    "Schools typically teach only at a specific education level (e.g. tertiary)"
                 )
             },
         ),
@@ -304,15 +284,6 @@ def _(DAG, nx):
                 )
             },
         ),
-        (
-            "work_experience",
-            "income",
-            {
-                "rationale": (
-                    "Additional years of work experience increase skills, productivity, and wages over time"
-                )
-            },
-        ),
         # --- Survey selection mechanisms ---
         (
             "income",
@@ -354,17 +325,54 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    include_var__family_ses = mo.ui.checkbox(label="Family Socio-Economic Status")
-    include_var__test_scores = mo.ui.checkbox(label="Test Scores")
+    include_var__education_level = mo.ui.checkbox(
+        label="Formal Education Level Attained"
+    )
+    include_var__education_institution = mo.ui.checkbox(
+        label="Most Recent Education Institution Attended"
+    )
+    include_var__parents_education = mo.ui.checkbox(
+        label="Parents Education Level"
+    )
+    include_var__family_wealth = mo.ui.checkbox(label="Family Wealth")
+    include_var__income = mo.ui.checkbox(label="Income")
+    include_var__profess_network = mo.ui.checkbox(
+        label="Access to Professional Network"
+    )
+    include_var__survey_participation = mo.ui.checkbox(
+        label="Survey participation"
+    )
+    include_var__occupation = mo.ui.checkbox(label="Occupation")
+    include_var__test_scores = mo.ui.checkbox(label="Most Recent Test Scores")
+    include_var__location = mo.ui.checkbox(label="Location")
 
     mo.vstack(
         [
             mo.md("## Variables to Include in Model"),
-            include_var__family_ses,
+            include_var__education_level,
+            include_var__education_institution,
+            include_var__parents_education,
+            include_var__family_wealth,
+            include_var__income,
+            include_var__profess_network,
+            include_var__survey_participation,
+            include_var__occupation,
             include_var__test_scores,
+            include_var__location,
         ]
     )
-    return include_var__family_ses, include_var__test_scores
+    return (
+        include_var__education_institution,
+        include_var__education_level,
+        include_var__family_wealth,
+        include_var__income,
+        include_var__location,
+        include_var__occupation,
+        include_var__parents_education,
+        include_var__profess_network,
+        include_var__survey_participation,
+        include_var__test_scores,
+    )
 
 
 @app.cell(column=2, hide_code=True)
@@ -376,11 +384,33 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(g, include_var__family_ses, include_var__test_scores, json, mo):
+def _(
+    g,
+    include_var__education_institution,
+    include_var__education_level,
+    include_var__family_wealth,
+    include_var__income,
+    include_var__location,
+    include_var__occupation,
+    include_var__parents_education,
+    include_var__profess_network,
+    include_var__survey_participation,
+    include_var__test_scores,
+    json,
+    mo,
+):
     nodes_included_in_model = set()
     for vbl_name, checkbox in (
-        ("family_ses", include_var__family_ses),
+        ("education_level", include_var__education_level),
+        ("education_institution", include_var__education_institution),
+        ("parents_education", include_var__parents_education),
+        ("family_wealth", include_var__family_wealth),
+        ("income", include_var__income),
+        ("profess_network", include_var__profess_network),
+        ("survey_participation", include_var__survey_participation),
+        ("occupation", include_var__occupation),
         ("test_scores", include_var__test_scores),
+        ("location", include_var__location),
     ):
         if checkbox.value:
             nodes_included_in_model.add(vbl_name)
@@ -481,7 +511,7 @@ def _(g, include_var__family_ses, include_var__test_scores, json, mo):
                 'border-width': 1.5,
                 'border-color': '#374151',
 
-                'color': '#f3f4f6',
+                'color': '#ffffff',
 
                 'text-wrap': 'wrap',
                 'text-max-width': 140,
@@ -556,7 +586,7 @@ def _(g, include_var__family_ses, include_var__test_scores, json, mo):
                  // hidden by default
                  'label': '',
                  'font-size': 25,
-                 'color': '#f3f4f6',
+                 'color': '#ffffff',
 
                  'text-background-color': '#111827',
                  'text-background-opacity': 0.9,
@@ -592,6 +622,8 @@ def _(g, include_var__family_ses, include_var__test_scores, json, mo):
               style: {{
                 'border-color': '#bfdbfe',
                 'background-color': '#1f2937',
+                    'text-opacity': 1,
+                    'opacity': 1,
               }}
             }},
 
@@ -668,7 +700,7 @@ def _(g, include_var__family_ses, include_var__test_scores, json, mo):
     </html>
     """
 
-    mo.iframe(html, height="600px")
+    mo.iframe(html, height="500px")
     return
 
 
