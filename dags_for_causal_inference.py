@@ -27,6 +27,9 @@ def _():
 def _(DAG, nx):
     g = nx.DiGraph()
 
+    ## TODO ##
+    # NEED TO ADD scholarship -> education_level
+
     nodes = {
         "ability_motivation": "Ability/Motivation",
         "education_level": "Formal Education Level Attained",
@@ -39,6 +42,7 @@ def _(DAG, nx):
         "occupation": "Occupation",
         "test_scores": "Most Recent Test Scores",
         "location": "Location",
+        "scholarship": "Received scholarship for most recent study",
     }
 
     g.add_nodes_from(nodes.keys())
@@ -100,6 +104,15 @@ def _(DAG, nx):
                 )
             },
         ),
+        (
+            "family_wealth",
+            "scholarship",
+            {
+                "rationale": (
+                    "Poor families are eligible for needs-based scholarships"
+                )
+            },
+        ),
         # --- Ability and academic preparation ---
         (
             "ability_motivation",
@@ -107,6 +120,15 @@ def _(DAG, nx):
             {
                 "rationale": (
                     "Innate ability and motivation strongly influence academic test performance"
+                )
+            },
+        ),
+        (
+            "ability_motivation",
+            "scholarship",
+            {
+                "rationale": (
+                    "More talented and motivated students are more likely to chase scholarships"
                 )
             },
         ),
@@ -134,6 +156,15 @@ def _(DAG, nx):
             {
                 "rationale": (
                     "Ability and motivation can independently improve labor productivity and career success beyond formal education"
+                )
+            },
+        ),
+        (
+            "test_scores",
+            "scholarship",
+            {
+                "rationale": (
+                    "High academic achievement is required for merit-based scholarships"
                 )
             },
         ),
@@ -303,7 +334,10 @@ def _(DAG, nx):
     # Verify DAG
     print("Is DAG:", nx.is_directed_acyclic_graph(g))
 
-    pgmpy_dag = DAG(g)
+    pgmpy_dag = DAG(
+        g,
+        roles={"exposures": "education_level", "outcomes": "income"},
+    )
     return g, pgmpy_dag
 
 
@@ -345,6 +379,9 @@ def _(mo):
     include_var__occupation = mo.ui.checkbox(label="Occupation")
     include_var__test_scores = mo.ui.checkbox(label="Most Recent Test Scores")
     include_var__location = mo.ui.checkbox(label="Location")
+    include_var__scholarship = mo.ui.checkbox(
+        label="Received scholarship for most recent study"
+    )
 
     mo.vstack(
         [
@@ -359,6 +396,7 @@ def _(mo):
             include_var__occupation,
             include_var__test_scores,
             include_var__location,
+            include_var__scholarship,
         ]
     )
     return (
@@ -370,9 +408,37 @@ def _(mo):
         include_var__occupation,
         include_var__parents_education,
         include_var__profess_network,
+        include_var__scholarship,
         include_var__survey_participation,
         include_var__test_scores,
     )
+
+
+@app.cell
+def _(pgmpy_dag):
+    import pgmpy
+    from pgmpy.identification import Adjustment
+
+    # https://pgmpy.org/examples/Causal_Games.html
+    needs_adjustment: bool = Adjustment().validate(pgmpy_dag)
+    print(f"Are there any active backdoor paths? {not needs_adjustment}")
+
+    adjusted_graphs, success = Adjustment(variant="all").identify(pgmpy_dag)
+
+    print(f"No. of potential adjustment sets: {len(adjusted_graphs)}")
+
+    all_backdoor_adjustment_sets = [
+        str(graph.get_role("adjustment")) for graph in adjusted_graphs
+    ]
+    print("Possible backdoor adjustment sets:")
+    for adjustment_set in all_backdoor_adjustment_sets:
+        print(adjustment_set)
+    return
+
+
+@app.cell
+def _():
+    return
 
 
 @app.cell(column=2, hide_code=True)
@@ -394,6 +460,7 @@ def _(
     include_var__occupation,
     include_var__parents_education,
     include_var__profess_network,
+    include_var__scholarship,
     include_var__survey_participation,
     include_var__test_scores,
     json,
@@ -411,6 +478,7 @@ def _(
         ("occupation", include_var__occupation),
         ("test_scores", include_var__test_scores),
         ("location", include_var__location),
+        ("scholarship", include_var__scholarship),
     ):
         if checkbox.value:
             nodes_included_in_model.add(vbl_name)
