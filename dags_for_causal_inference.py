@@ -214,6 +214,15 @@ def _(DAG, nx):
                 )
             },
         ),
+        (
+            "scholarship",
+            "education_level",
+            {
+                "rationale": (
+                    "Scholarships increase ease of access to formal education"
+                )
+            },
+        ),
         # --- Education pathways and labor market mechanisms ---
         (
             "education_level",
