@@ -21,11 +21,12 @@ def _():
     import networkx as nx
     import numpy as np
     import polars as pl
+    import xgboost as xgb
     from scipy.special import softmax
     from scipy.stats import truncnorm
     from pgmpy.base import DAG
 
-    return DAG, alt, json, mo, np, nx, pl, softmax, truncnorm
+    return DAG, alt, json, mo, np, nx, pl, softmax, truncnorm, xgb
 
 
 @app.cell
@@ -373,9 +374,6 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    include_var__education_level = mo.ui.checkbox(
-        label="Formal Education Level Attained"
-    )
     include_var__education_institution = mo.ui.checkbox(
         label="Most Recent Education Institution Attended"
     )
@@ -383,7 +381,6 @@ def _(mo):
         label="Parents Education Level"
     )
     include_var__family_wealth = mo.ui.checkbox(label="Family Wealth")
-    include_var__income = mo.ui.checkbox(label="Income")
     include_var__profess_network = mo.ui.checkbox(
         label="Access to Professional Network"
     )
@@ -400,11 +397,9 @@ def _(mo):
     mo.vstack(
         [
             mo.md("## Variables to Include in Model"),
-            include_var__education_level,
             include_var__education_institution,
             include_var__parents_education,
             include_var__family_wealth,
-            include_var__income,
             include_var__profess_network,
             include_var__survey_participation,
             include_var__occupation,
@@ -415,9 +410,7 @@ def _(mo):
     )
     return (
         include_var__education_institution,
-        include_var__education_level,
         include_var__family_wealth,
-        include_var__income,
         include_var__location,
         include_var__occupation,
         include_var__parents_education,
@@ -467,9 +460,7 @@ def _(mo):
 def _(
     g,
     include_var__education_institution,
-    include_var__education_level,
     include_var__family_wealth,
-    include_var__income,
     include_var__location,
     include_var__occupation,
     include_var__parents_education,
@@ -482,11 +473,9 @@ def _(
 ):
     nodes_included_in_model = set()
     for vbl_name, checkbox in (
-        ("education_level", include_var__education_level),
         ("education_institution", include_var__education_institution),
         ("parents_education", include_var__parents_education),
         ("family_wealth", include_var__family_wealth),
-        ("income", include_var__income),
         ("profess_network", include_var__profess_network),
         ("survey_participation", include_var__survey_participation),
         ("occupation", include_var__occupation),
@@ -787,7 +776,41 @@ def _(
 
 
 @app.cell
-def _():
+def _(mo):
+    run_model_simulations = mo.ui.run_button(label="Run model simulations")
+    n_samples = mo.ui.number(
+        start=1, stop=100_000, value=999, label="Number of samples"
+    )
+    n_simulations = mo.ui.number(
+        start=1, stop=100_000, value=50, label="Number of simulations"
+    )
+    mo.vstack(
+        [
+            n_samples,
+            n_simulations,
+            run_model_simulations,
+        ]
+    )
+    return n_samples, n_simulations, run_model_simulations
+
+
+@app.cell
+def _(mo, n_samples, n_simulations, run_model_simulations, simulate_dag, xgb):
+    mo.stop(not run_model_simulations.value)
+
+    sim_model_data = simulate_dag(
+        n=n_samples.value,
+    )
+
+    import time
+
+    for i in mo.status.progress_bar(
+        range(n_simulations.value), title="Running modelling simulations"
+    ):
+        model = xgb.XGBRegressor(
+            tree_method="hist",
+            enable_categorical=True,
+        )
     return
 
 
@@ -843,11 +866,10 @@ def _(alt, mo, pl, sim_data):
 @app.cell
 def _(pl, sim_data):
     (
-        sim_data
-        .group_by("parents_education")
+        sim_data.group_by("parents_education")
         .agg(
-         percent_scholarship=pl.col("scholarship").mean() * 100,
-        percent_no_scholarship=(~pl.col("scholarship")).mean() * 100,
+            percent_scholarship=pl.col("scholarship").mean() * 100,
+            percent_no_scholarship=(~pl.col("scholarship")).mean() * 100,
         )
         .sort("parents_education")
     )
@@ -857,11 +879,10 @@ def _(pl, sim_data):
 @app.cell
 def _(pl, sim_data):
     (
-        sim_data
-        .group_by("parents_education")
+        sim_data.group_by("parents_education")
         .agg(
-         percent_scholarship=pl.col("scholarship").mean() * 100,
-        percent_no_scholarship=(~pl.col("scholarship")).mean() * 100,
+            percent_scholarship=pl.col("scholarship").mean() * 100,
+            percent_no_scholarship=(~pl.col("scholarship")).mean() * 100,
         )
         .sort("parents_education")
     )
