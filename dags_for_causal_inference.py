@@ -794,23 +794,99 @@ def _(mo):
     return n_samples, n_simulations, run_model_simulations
 
 
-@app.cell
-def _(mo, n_samples, n_simulations, run_model_simulations, simulate_dag, xgb):
+@app.cell(hide_code=True)
+def _(
+    EDUCATION_LEVELS,
+    alt,
+    mo,
+    n_samples,
+    n_simulations,
+    pl,
+    run_model_simulations,
+    simulate_dag,
+    xgb,
+):
     mo.stop(not run_model_simulations.value)
 
     sim_model_data = simulate_dag(
         n=n_samples.value,
     )
 
-    import time
+    mean_income_per_education_level = {
+        education_level: []  # 1 value stored for each simulation
+        for education_level in EDUCATION_LEVELS
+    }
 
     for i in mo.status.progress_bar(
         range(n_simulations.value), title="Running modelling simulations"
     ):
+        for education_level in EDUCATION_LEVELS:
+            simdata: pl.DataFrame = simulate_dag(
+                n=n_samples.value,
+                education_level=education_level,
+                seed=i,
+            )
+            mean_income_per_education_level[education_level].append(
+                simdata["income"].mean()
+            )
+
         model = xgb.XGBRegressor(
             tree_method="hist",
             enable_categorical=True,
         )
+
+    plot_df = pl.DataFrame(
+        [
+            {"education_level": level, "mean_income": value}
+            for level, values in mean_income_per_education_level.items()
+            for value in values
+        ]
+    )
+
+    simbase = alt.Chart(plot_df).encode(
+        x=alt.X(
+            "mean_income:Q",
+            bin=alt.Bin(maxbins=100),
+            title="Mean income",
+        ),
+        y=alt.Y("count():Q", title="Simulations"),
+    )
+
+    hist = simbase.mark_bar()
+
+    mean_rule = (
+        alt.Chart(plot_df)
+        .transform_joinaggregate(
+            education_mean="mean(mean_income)",
+            groupby=["education_level"],
+        )
+        .mark_rule(strokeWidth=2)
+        .encode(
+            x=alt.X("education_mean:Q", title="Mean income"),
+            tooltip=[
+                "education_level:N",
+                alt.Tooltip("education_mean:Q", format=",.0f"),
+            ],
+        )
+    )
+
+    simchart = (
+        (hist + mean_rule)
+        .properties(
+            width=900,
+            height=60,
+        )
+        .facet(
+            row=alt.Row(
+                "education_level:N",
+                title=None,
+                sort=list(mean_income_per_education_level.keys()),
+            )
+        )
+        .resolve_scale(x="shared", y="independent")
+    )
+
+    mo.ui.altair_chart(simchart)
     return
 
 
@@ -1206,7 +1282,7 @@ def _(np, pl, softmax, truncnorm):
         occ_idx = _categorical(rng, occ_probs)
 
         # ------------------------------------------------------------------
-        # 11. income  ~  LogNormal(log_mu, sigma=0.6)  monthly ZAR
+        # 11. income  ~  LogNormal(log_mu, sigma)  monthly ZAR
         # ------------------------------------------------------------------
         occ_base = OCCUPATION_LOG_MU[occ_idx]
         income_log_mu = (
@@ -1218,7 +1294,7 @@ def _(np, pl, softmax, truncnorm):
             + 0.10 * ability
             + np.log(wage_scalar)
         )
-        income = rng.lognormal(mean=income_log_mu, sigma=0.6)
+        income = rng.lognormal(mean=income_log_mu, sigma=2)
 
         # ------------------------------------------------------------------
         # 12. survey_participation  ~  Bernoulli(sigmoid(logit))
@@ -1266,7 +1342,7 @@ def _(np, pl, softmax, truncnorm):
 
         return df
 
-    return (simulate_dag,)
+    return EDUCATION_LEVELS, simulate_dag
 
 
 if __name__ == "__main__":
