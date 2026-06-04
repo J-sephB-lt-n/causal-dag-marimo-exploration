@@ -394,6 +394,14 @@ def _(mo):
         label="Received scholarship for most recent study"
     )
 
+    run_model_simulations = mo.ui.run_button(label="Run model simulations")
+    n_samples = mo.ui.number(
+        start=1, stop=100_000, value=999, label="Number of samples"
+    )
+    n_simulations = mo.ui.number(
+        start=1, stop=100_000, value=50, label="Number of simulations"
+    )
+
     mo.vstack(
         [
             mo.md("## Variables to Include in Model"),
@@ -406,6 +414,9 @@ def _(mo):
             include_var__test_scores,
             include_var__location,
             include_var__scholarship,
+            n_samples,
+            n_simulations,
+            run_model_simulations,
         ]
     )
     return (
@@ -418,7 +429,40 @@ def _(mo):
         include_var__scholarship,
         include_var__survey_participation,
         include_var__test_scores,
+        n_samples,
+        n_simulations,
+        run_model_simulations,
     )
+
+
+@app.cell(hide_code=True)
+def _(
+    include_var__education_institution,
+    include_var__family_wealth,
+    include_var__location,
+    include_var__occupation,
+    include_var__parents_education,
+    include_var__profess_network,
+    include_var__scholarship,
+    include_var__survey_participation,
+    include_var__test_scores,
+):
+    vars_in_model: list[str] = []
+    for vbl_name, checkbox in (
+        ("education_institution", include_var__education_institution),
+        ("parents_education", include_var__parents_education),
+        ("family_wealth", include_var__family_wealth),
+        ("profess_network", include_var__profess_network),
+        ("survey_participation", include_var__survey_participation),
+        ("occupation", include_var__occupation),
+        ("test_scores", include_var__test_scores),
+        ("location", include_var__location),
+        ("scholarship", include_var__scholarship),
+    ):
+        if checkbox.value:
+            vars_in_model.append(vbl_name)
+    print("variables included in model: ", ", ".join(vars_in_model))
+    return (vars_in_model,)
 
 
 @app.cell
@@ -457,34 +501,8 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(
-    g,
-    include_var__education_institution,
-    include_var__family_wealth,
-    include_var__location,
-    include_var__occupation,
-    include_var__parents_education,
-    include_var__profess_network,
-    include_var__scholarship,
-    include_var__survey_participation,
-    include_var__test_scores,
-    json,
-    mo,
-):
-    nodes_included_in_model = set()
-    for vbl_name, checkbox in (
-        ("education_institution", include_var__education_institution),
-        ("parents_education", include_var__parents_education),
-        ("family_wealth", include_var__family_wealth),
-        ("profess_network", include_var__profess_network),
-        ("survey_participation", include_var__survey_participation),
-        ("occupation", include_var__occupation),
-        ("test_scores", include_var__test_scores),
-        ("location", include_var__location),
-        ("scholarship", include_var__scholarship),
-    ):
-        if checkbox.value:
-            nodes_included_in_model.add(vbl_name)
+def _(g, json, mo, vars_in_model: list[str]):
+    nodes_included_in_model = set(vars_in_model)
 
     # Convert to Cytoscape format
     cy_nodes = [
@@ -775,118 +793,106 @@ def _(
     return
 
 
-@app.cell
-def _(mo):
-    run_model_simulations = mo.ui.run_button(label="Run model simulations")
-    n_samples = mo.ui.number(
-        start=1, stop=100_000, value=999, label="Number of samples"
-    )
-    n_simulations = mo.ui.number(
-        start=1, stop=100_000, value=50, label="Number of simulations"
-    )
-    mo.vstack(
-        [
-            n_samples,
-            n_simulations,
-            run_model_simulations,
-        ]
-    )
-    return n_samples, n_simulations, run_model_simulations
-
-
 @app.cell(hide_code=True)
 def _(
     EDUCATION_LEVELS,
-    alt,
     mo,
     n_samples,
     n_simulations,
     pl,
     run_model_simulations,
     simulate_dag,
+    vars_in_model: list[str],
     xgb,
 ):
     mo.stop(not run_model_simulations.value)
-
-    sim_model_data = simulate_dag(
-        n=n_samples.value,
-    )
 
     mean_income_per_education_level = {
         education_level: []  # 1 value stored for each simulation
         for education_level in EDUCATION_LEVELS
     }
 
-    for i in mo.status.progress_bar(
-        range(n_simulations.value), title="Running modelling simulations"
-    ):
-        for education_level in EDUCATION_LEVELS:
-            simdata: pl.DataFrame = simulate_dag(
-                n=n_samples.value,
-                education_level=education_level,
-                seed=i,
-            )
-            mean_income_per_education_level[education_level].append(
-                simdata["income"].mean()
-            )
+    all_datasets: list[pl.DataFrame] = []
 
+    for sample_num in mo.status.progress_bar(
+        range(1, n_simulations.value + 1), title="Running modelling simulations"
+    ):
+        model_train_data = simulate_dag(
+            n_samples.value,
+            seed=69 * sample_num,
+        )
         model = xgb.XGBRegressor(
             tree_method="hist",
             enable_categorical=True,
         )
-
-    plot_df = pl.DataFrame(
-        [
-            {"education_level": level, "mean_income": value}
-            for level, values in mean_income_per_education_level.items()
-            for value in values
-        ]
-    )
-
-    simbase = alt.Chart(plot_df).encode(
-        x=alt.X(
-            "mean_income:Q",
-            bin=alt.Bin(maxbins=100),
-            title="Mean income",
-        ),
-        y=alt.Y("count():Q", title="Simulations"),
-    )
-
-    hist = simbase.mark_bar()
-
-    mean_rule = (
-        alt.Chart(plot_df)
-        .transform_joinaggregate(
-            education_mean="mean(mean_income)",
-            groupby=["education_level"],
+        model.fit(
+            model_train_data.select(vars_in_model),
+            model_train_data.select("income"),
         )
-        .mark_rule(strokeWidth=2)
-        .encode(
-            x=alt.X("education_mean:Q", title="Mean income"),
-            tooltip=[
-                "education_level:N",
-                alt.Tooltip("education_mean:Q", format=",.0f"),
-            ],
-        )
-    )
 
-    simchart = (
-        (hist + mean_rule)
-        .properties(
-            width=900,
-            height=60,
-        )
-        .facet(
-            row=alt.Row(
-                "education_level:N",
-                title=None,
-                sort=list(mean_income_per_education_level.keys()),
-            )
-        )
-        .resolve_scale(x="shared", y="independent")
-    )
+        # for education_level in EDUCATION_LEVELS:
+        #     simdata: pl.DataFrame = simulate_dag(
+        #         n=n_samples.value,
+        #         education_level=education_level,
+        #         seed=i,
+        #     )
+        #     mean_income_per_education_level[education_level].append(
+        #         simdata["income"].mean()
+        #     )
 
-    mo.ui.altair_chart(simchart)
+
+    # plot_df = pl.DataFrame(
+    #     [
+    #         {"education_level": level, "mean_income": value}
+    #         for level, values in mean_income_per_education_level.items()
+    #         for value in values
+    #     ]
+    # )
+
+    # simbase = alt.Chart(plot_df).encode(
+    #     x=alt.X(
+    #         "mean_income:Q",
+    #         bin=alt.Bin(maxbins=100),
+    #         title="Mean income",
+    #     ),
+    #     y=alt.Y("count():Q", title="Simulations"),
+    # )
+
+    # hist = simbase.mark_bar()
+
+    # mean_rule = (
+    #     alt.Chart(plot_df)
+    #     .transform_joinaggregate(
+    #         education_mean="mean(mean_income)",
+    #         groupby=["education_level"],
+    #     )
+    #     .mark_rule(strokeWidth=2)
+    #     .encode(
+    #         x=alt.X("education_mean:Q", title="Mean income"),
+    #         tooltip=[
+    #             "education_level:N",
+    #             alt.Tooltip("education_mean:Q", format=",.0f"),
+    #         ],
+    #     )
+    # )
+
+    # simchart = (
+    #     (hist + mean_rule)
+    #     .properties(
+    #         width=900,
+    #         height=60,
+    #     )
+    #     .facet(
+    #         row=alt.Row(
+    #             "education_level:N",
+    #             title=None,
+    #             sort=list(mean_income_per_education_level.keys()),
+    #         )
+    #     )
+    #     .resolve_scale(x="shared", y="independent")
+    # )
+
+    # mo.ui.altair_chart(simchart)
     return
 
 
@@ -1084,8 +1090,8 @@ def _(np, pl, softmax, truncnorm):
 
     def simulate_dag(
         n: int,
+        seed: int,
         education_level: str | None = None,
-        seed: int = 42,
     ) -> pl.DataFrame:
         """
         Simulate n observations from the education-income causal DAG via
@@ -1095,12 +1101,12 @@ def _(np, pl, softmax, truncnorm):
         ----------
         n : int
             Number of samples to generate.
+        seed : int
+            Random seed for reproducibility.
         education_level : str or None
             Causal intervention do(education_level=e). Must be one of
             EDUCATION_LEVELS. When set, education_level is fixed for all
-            observations rather than sampled from its observational distribution.
-        seed : int
-            Random seed for reproducibility.
+            observations rather than sampled from its observational distribution
 
         Returns
         -------
@@ -1207,45 +1213,50 @@ def _(np, pl, softmax, truncnorm):
         is_univ_or_elite = (inst_idx >= 2).astype(float)
         is_elite = (inst_idx == 3).astype(float)
 
+        edu_logits = np.column_stack(
+            [
+                np.zeros(n),
+                0.5 + 0.2 * parents_edu_f + 0.1 * ability,
+                2.0
+                + 0.4 * parents_edu_f
+                + 0.3 * ability
+                + 0.3 * log_wealth_scaled
+                - 0.3 * is_rural,
+                0.0
+                + 0.7 * parents_edu_f
+                + 0.8 * ability
+                + 0.7 * log_wealth_scaled
+                - 0.5 * is_rural
+                + 1.5 * is_univ_or_elite
+                + 0.8 * scholarship,
+                -2.0
+                + 0.6 * parents_edu_f
+                + 0.9 * ability
+                + 0.6 * log_wealth_scaled
+                - 0.6 * is_rural
+                + 1.2 * is_elite
+                + 0.5 * scholarship,
+                -4.0
+                + 0.5 * parents_edu_f
+                + 1.0 * ability
+                + 0.5 * log_wealth_scaled
+                - 0.8 * is_rural
+                + 1.0 * is_elite
+                + 0.4 * scholarship,
+            ]
+        )
+        edu_probs = softmax(edu_logits, axis=1)
+        edu_idx = _categorical(rng, edu_probs)
+
+        # Even under intervention, consume the observational education draw so that
+        # downstream RNG calls are aligned with the observational simulation. This
+        # supports sample-wise comparisons using common random numbers.
+        # i.e. setting education_level='X' and resamplig a row which already had
+        #  education_level='X' results in identical data for that row
         if education_level is not None:
             edu_idx = np.full(
                 n, EDUCATION_LEVELS.index(education_level), dtype=int
             )
-        else:
-            edu_logits = np.column_stack(
-                [
-                    np.zeros(n),
-                    0.5 + 0.2 * parents_edu_f + 0.1 * ability,
-                    2.0
-                    + 0.4 * parents_edu_f
-                    + 0.3 * ability
-                    + 0.3 * log_wealth_scaled
-                    - 0.3 * is_rural,
-                    0.0
-                    + 0.7 * parents_edu_f
-                    + 0.8 * ability
-                    + 0.7 * log_wealth_scaled
-                    - 0.5 * is_rural
-                    + 1.5 * is_univ_or_elite
-                    + 0.8 * scholarship,
-                    -2.0
-                    + 0.6 * parents_edu_f
-                    + 0.9 * ability
-                    + 0.6 * log_wealth_scaled
-                    - 0.6 * is_rural
-                    + 1.2 * is_elite
-                    + 0.5 * scholarship,
-                    -4.0
-                    + 0.5 * parents_edu_f
-                    + 1.0 * ability
-                    + 0.5 * log_wealth_scaled
-                    - 0.8 * is_rural
-                    + 1.0 * is_elite
-                    + 0.4 * scholarship,
-                ]
-            )
-            edu_probs = softmax(edu_logits, axis=1)
-            edu_idx = _categorical(rng, edu_probs)
 
         # ------------------------------------------------------------------
         # 9. profess_network  ~  Beta(alpha, beta)
