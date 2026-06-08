@@ -430,7 +430,6 @@ def _(mo):
         include_var__survey_participation,
         include_var__test_scores,
         n_samples,
-        n_simulations,
         run_model_simulations,
     )
 
@@ -484,11 +483,6 @@ def _(pgmpy_dag):
     print("Possible backdoor adjustment sets:")
     for adjustment_set in all_backdoor_adjustment_sets:
         print(adjustment_set)
-    return
-
-
-@app.cell
-def _():
     return
 
 
@@ -794,11 +788,29 @@ def _(g, json, mo, vars_in_model: list[str]):
 
 
 @app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    We are interested in seeing if the model can learn
+
+    $$E[Y|do(E=e), X=x]$$
+
+    The plan:
+    1. Simulate a training dataset and train the model
+    2. Simulate a test dataset
+    3. For each test individual $i$, generate model predictions under counterfactual feature edits:
+    $$\hat{Y_i}(E=e) - \hat{Y_i}(E=0)$$
+    4. For each individual in the test dataset, simulate the true causal contrast (JOE TODO: many per individual!):
+    $$Y_i^{do(E=e)}-Y_i^{do(E=0)}$$
+    5. Compare the model contrasts to the true contrasts, individual by individual or averaged over the test population.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
 def _(
     EDUCATION_LEVELS,
     mo,
     n_samples,
-    n_simulations,
     pl,
     run_model_simulations,
     simulate_dag,
@@ -814,31 +826,37 @@ def _(
 
     all_datasets: list[pl.DataFrame] = []
 
-    for sample_num in mo.status.progress_bar(
-        range(1, n_simulations.value + 1), title="Running modelling simulations"
-    ):
-        model_train_data = simulate_dag(
-            n_samples.value,
-            seed=69 * sample_num,
-        )
-        model = xgb.XGBRegressor(
-            tree_method="hist",
-            enable_categorical=True,
-        )
-        model.fit(
-            model_train_data.select(vars_in_model),
-            model_train_data.select("income"),
+    train_data = simulate_dag(
+        n=n_samples.value,
+        seed=271828,
+    )
+    TEST_DATA_SEED = 3141592
+    test_data = simulate_dag(
+        n=10_000,
+        seed=TEST_DATA_SEED,
+    )
+
+    model = xgb.XGBRegressor(
+        tree_method="hist",
+        enable_categorical=True,
+    )
+    model.fit(
+        train_data.select(vars_in_model + ["education_level"]),
+        train_data.select("income"),
+    )
+
+    test_data_for_contrasts: dict[str, pl.DataFrame] = {}
+
+    for education_level in EDUCATION_LEVELS:
+        test_data_for_contrasts[education_level] = simulate_dag(
+            n=len(test_data),
+            education_level=education_level,
+            seed=TEST_DATA_SEED,
         )
 
-        # for education_level in EDUCATION_LEVELS:
-        #     simdata: pl.DataFrame = simulate_dag(
-        #         n=n_samples.value,
-        #         education_level=education_level,
-        #         seed=i,
-        #     )
-        #     mean_income_per_education_level[education_level].append(
-        #         simdata["income"].mean()
-        #     )
+    # for sample_num in mo.status.progress_bar(
+    #    range(1, n_simulations.value + 1), title="Running modelling simulations"
+    # ):
 
 
     # plot_df = pl.DataFrame(
@@ -893,6 +911,12 @@ def _(
     # )
 
     # mo.ui.altair_chart(simchart)
+    return (test_data_for_contrasts,)
+
+
+@app.cell
+def _(test_data_for_contrasts: "dict[str, pl.DataFrame]"):
+    test_data_for_contrasts
     return
 
 
