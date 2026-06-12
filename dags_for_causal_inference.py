@@ -15,6 +15,7 @@ def _(mo):
 @app.cell
 def _():
     import json
+    from typing import Final, Literal
 
     import altair as alt
     import marimo as mo
@@ -26,7 +27,20 @@ def _():
     from scipy.stats import truncnorm
     from pgmpy.base import DAG
 
-    return DAG, alt, json, mo, np, nx, pl, softmax, truncnorm, xgb
+    return (
+        DAG,
+        Final,
+        Literal,
+        alt,
+        json,
+        mo,
+        np,
+        nx,
+        pl,
+        softmax,
+        truncnorm,
+        xgb,
+    )
 
 
 @app.cell
@@ -806,9 +820,9 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(
-    EDUCATION_LEVELS,
+    EDUCATION_LEVELS: "Final[tuple[str, ...]]",
     mo,
     n_samples,
     pl,
@@ -914,7 +928,7 @@ def _(
     return (test_data_for_contrasts,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(test_data_for_contrasts: "dict[str, pl.DataFrame]"):
     test_data_for_contrasts
     return
@@ -1004,7 +1018,7 @@ def _(mo):
 
 
 @app.cell
-def _(np, pl, softmax, truncnorm):
+def _(Final, Literal, np, pl, softmax, truncnorm):
     """
     Simulate data from the education-income causal DAG using ancestral sampling
     with numpy/scipy.
@@ -1027,7 +1041,7 @@ def _(np, pl, softmax, truncnorm):
     # Constants
     # ---------------------------------------------------------------------------
 
-    PROVINCES = [
+    PROVINCES: Final[tuple[str, ...]] = (
         "Gauteng",
         "KwaZulu-Natal",
         "Western Cape",
@@ -1037,7 +1051,7 @@ def _(np, pl, softmax, truncnorm):
         "North West",
         "Free State",
         "Northern Cape",
-    ]
+    )
 
     PROVINCE_WEIGHTS = np.array(
         [0.26, 0.20, 0.12, 0.11, 0.10, 0.08, 0.07, 0.05, 0.02]
@@ -1061,14 +1075,14 @@ def _(np, pl, softmax, truncnorm):
     # 1 = rural, 0 = urban
     PROVINCE_IS_RURAL = np.array([0, 0, 0, 1, 1, 1, 1, 0, 1], dtype=float)
 
-    EDUCATION_LEVELS = [
+    EDUCATION_LEVELS: Final[tuple[str, ...]] = (
         "0-no-formal-education",
         "1-primary",
         "2-secondary",
         "3-tertiary-undergrad",
         "4-tertiary-masters",
         "5-tertiary-phd",
-    ]
+    )
 
     INSTITUTION_LEVELS = [
         "none",
@@ -1116,6 +1130,13 @@ def _(np, pl, softmax, truncnorm):
         n: int,
         seed: int,
         education_level: str | None = None,
+        ability_motivation: float | None = None,
+        education_institution: Literal[*INSTITUTION_LEVELS] | None = None,
+        family_wealth: float | None = None,
+        location: Literal[*PROVINCES] | None = None,
+        parents_education: Literal[*EDUCATION_LEVELS] | None = None,
+        test_scores: float | None = None,
+        scholarship: bool | None = None,
     ) -> pl.DataFrame:
         """
         Simulate n observations from the education-income causal DAG via
