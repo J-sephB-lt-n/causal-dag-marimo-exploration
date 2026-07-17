@@ -27,20 +27,7 @@ def _():
     from scipy.stats import truncnorm
     from pgmpy.base import DAG
 
-    return (
-        DAG,
-        Final,
-        Literal,
-        alt,
-        json,
-        mo,
-        np,
-        nx,
-        pl,
-        softmax,
-        truncnorm,
-        xgb,
-    )
+    return DAG, Final, Literal, alt, json, mo, np, nx, pl, softmax, truncnorm
 
 
 @app.cell
@@ -443,8 +430,6 @@ def _(mo):
         include_var__scholarship,
         include_var__survey_participation,
         include_var__test_scores,
-        n_samples,
-        run_model_simulations,
     )
 
 
@@ -820,17 +805,8 @@ def _(mo):
     return
 
 
-@app.cell
-def _(
-    EDUCATION_LEVELS: "Final[tuple[str, ...]]",
-    mo,
-    n_samples,
-    pl,
-    run_model_simulations,
-    simulate_dag,
-    vars_in_model: list[str],
-    xgb,
-):
+app._unparsable_cell(
+    r"""
     mo.stop(not run_model_simulations.value)
 
     mean_income_per_education_level = {
@@ -855,22 +831,26 @@ def _(
         enable_categorical=True,
     )
     model.fit(
-        train_data.select(vars_in_model + ["education_level"]),
-        train_data.select("income"),
+        X=train_data.select(vars_in_model + ["education_level"]),
+        y=train_data.select("income"),
     )
 
-    test_data_for_contrasts: dict[str, pl.DataFrame] = {}
+    for sample_num in mo.status.progress_bar(
+        range(1, n_simulations.value + 1), title="Running modelling simulations"
+    ):
+    
+    
 
-    for education_level in EDUCATION_LEVELS:
-        test_data_for_contrasts[education_level] = simulate_dag(
-            n=len(test_data),
-            education_level=education_level,
-            seed=TEST_DATA_SEED,
-        )
 
-    # for sample_num in mo.status.progress_bar(
-    #    range(1, n_simulations.value + 1), title="Running modelling simulations"
-    # ):
+    # test_data_for_contrasts: dict[str, pl.DataFrame] = {}
+
+    # for education_level in EDUCATION_LEVELS:
+    #    test_data_for_contrasts[education_level] = simulate_dag(
+    #        n=len(test_data),
+    #        education_level=education_level,
+    #        seed=TEST_DATA_SEED,
+    #    )
+
 
 
     # plot_df = pl.DataFrame(
@@ -925,11 +905,13 @@ def _(
     # )
 
     # mo.ui.altair_chart(simchart)
-    return (test_data_for_contrasts,)
+    """,
+    name="_"
+)
 
 
 @app.cell(hide_code=True)
-def _(test_data_for_contrasts: "dict[str, pl.DataFrame]"):
+def _(test_data_for_contrasts):
     test_data_for_contrasts
     return
 
@@ -1019,6 +1001,8 @@ def _(mo):
 
 @app.cell
 def _(Final, Literal, np, pl, softmax, truncnorm):
+    from statsmodels.sandbox.distributions.otherdist import loc
+
     """
     Simulate data from the education-income causal DAG using ancestral sampling
     with numpy/scipy.
@@ -1137,6 +1121,8 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         parents_education: Literal[*EDUCATION_LEVELS] | None = None,
         test_scores: float | None = None,
         scholarship: bool | None = None,
+        population_log_wealth_mean: float | None = None,
+        population_log_wealth_sd: float | None = None,
     ) -> pl.DataFrame:
         """
         Simulate n observations from the education-income causal DAG via
@@ -1167,29 +1153,44 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         # ------------------------------------------------------------------
         # 1. ability_motivation  ~  N(0, 1)
         # ------------------------------------------------------------------
-        ability = rng.standard_normal(n)
+        if ability_motivation is None:
+            ability = rng.standard_normal(n)
+        else:
+            ability = np.full(n, ability_motivation, dtype=float)
 
         # ------------------------------------------------------------------
         # 2. location  ~  Categorical(province_weights)
         # ------------------------------------------------------------------
-        location_idx = rng.choice(len(PROVINCES), size=n, p=PROVINCE_WEIGHTS)
+        if location is None:
+            location_idx = rng.choice(len(PROVINCES), size=n, p=PROVINCE_WEIGHTS)
+        else:
+            location_idx = np.full(n, PROVINCES.index(location), dtype=int)
         is_rural = PROVINCE_IS_RURAL[location_idx]
         wage_scalar = PROVINCE_WAGE_SCALAR[location_idx]
 
         # ------------------------------------------------------------------
         # 3. parents_education  ~  Categorical(SA marginals)
         # ------------------------------------------------------------------
-        parents_edu_idx = rng.choice(
-            len(EDUCATION_LEVELS), size=n, p=PARENTS_EDU_PROBS
-        )
+        if parents_education is None:
+            parents_edu_idx = rng.choice(
+                len(EDUCATION_LEVELS), size=n, p=PARENTS_EDU_PROBS
+            )
+        else:
+            parents_edu_idx = np.full(
+                n, EDUCATION_LEVELS.index(parents_education), dtype=int
+            )
 
         # ------------------------------------------------------------------
         # 4. family_wealth  ~  LogNormal(mu[parents_edu], sigma[parents_edu])
         # ------------------------------------------------------------------
-        wealth_mu_vec = WEALTH_MU[parents_edu_idx]
-        wealth_sigma_vec = WEALTH_SIGMA[parents_edu_idx]
-        family_wealth = rng.lognormal(mean=wealth_mu_vec, sigma=wealth_sigma_vec)
-
+        if family_wealth is None:
+            wealth_mu_vec = WEALTH_MU[parents_edu_idx]
+            wealth_sigma_vec = WEALTH_SIGMA[parents_edu_idx]
+            family_wealth = rng.lognormal(
+                mean=wealth_mu_vec, sigma=wealth_sigma_vec
+            )
+        else:
+            family_wealth = np.full(n, family_wealth, dtype=float)
         log_wealth = np.log(family_wealth)
         log_wealth_scaled = (log_wealth - log_wealth.mean()) / (
             log_wealth.std() + 1e-8
@@ -1198,107 +1199,114 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         # ------------------------------------------------------------------
         # 5. test_scores  ~  TruncatedNormal(50 + 15*ability, 15) in [0, 100]
         # ------------------------------------------------------------------
-        ts_mu = 50.0 + 15.0 * ability
-        ts_sigma = 15.0
-        a_clip = (0.0 - ts_mu) / ts_sigma
-        b_clip = (100.0 - ts_mu) / ts_sigma
-        test_scores = truncnorm.rvs(
-            a_clip,
-            b_clip,
-            loc=ts_mu,
-            scale=ts_sigma,
-            random_state=rng.integers(2**31),
-        )
+        if test_scores is None:
+            ts_mu = 50.0 + 15.0 * ability
+            ts_sigma = 15.0
+            a_clip = (0.0 - ts_mu) / ts_sigma
+            b_clip = (100.0 - ts_mu) / ts_sigma
+            test_scores = truncnorm.rvs(
+                a_clip,
+                b_clip,
+                loc=ts_mu,
+                scale=ts_sigma,
+                random_state=rng.integers(2**31),
+            )
+        else:
+            test_scores = np.full(n, test_scores, dtype=float)
 
         # ------------------------------------------------------------------
         # 6. scholarship  ~  Bernoulli(sigmoid(logit))
         # ------------------------------------------------------------------
-        test_scores_scaled = (test_scores - 50.0) / 15.0
-        scholarship_logit = (
-            -3.8
-            - 0.8 * log_wealth_scaled
-            + 0.6 * ability
-            + 0.8 * test_scores_scaled
-        )
-        scholarship = (rng.random(n) < _sigmoid(scholarship_logit)).astype(float)
+        if scholarship is None:
+            test_scores_scaled = (test_scores - 50.0) / 15.0
+            scholarship_logit = (
+                -3.8
+                - 0.8 * log_wealth_scaled
+                + 0.6 * ability
+                + 0.8 * test_scores_scaled
+            )
+            scholarship = (rng.random(n) < _sigmoid(scholarship_logit)).astype(
+                float
+            )
+        else:
+            scholarship = np.full(n, scholarship, dtype=bool)
 
         # ------------------------------------------------------------------
         # 7. education_institution  ~  Categorical(softmax(logits))
         #    0=none, 1=community_college, 2=university, 3=elite_university
         # ------------------------------------------------------------------
-        parents_edu_f = parents_edu_idx.astype(float)
-
-        inst_logits = np.column_stack(
-            [
-                np.zeros(n),
-                1.5
-                + 0.3 * ability
-                + 0.2 * parents_edu_f
-                + 0.3 * log_wealth_scaled
-                - 0.5 * is_rural,
-                -0.5
-                + 0.8 * ability
-                + 0.6 * parents_edu_f
-                + 0.6 * log_wealth_scaled
-                - 0.8 * is_rural,
-                -3.0
-                + 1.2 * ability
-                + 0.8 * parents_edu_f
-                + 1.0 * log_wealth_scaled
-                - 1.2 * is_rural,
-            ]
-        )
-        inst_probs = softmax(inst_logits, axis=1)
-        inst_idx = _categorical(rng, inst_probs)
+        if education_institution is None:
+            parents_edu_f = parents_edu_idx.astype(float)
+            inst_logits = np.column_stack(
+                [
+                    np.zeros(n),
+                    1.5
+                    + 0.3 * ability
+                    + 0.2 * parents_edu_f
+                    + 0.3 * log_wealth_scaled
+                    - 0.5 * is_rural,
+                    -0.5
+                    + 0.8 * ability
+                    + 0.6 * parents_edu_f
+                    + 0.6 * log_wealth_scaled
+                    - 0.8 * is_rural,
+                    -3.0
+                    + 1.2 * ability
+                    + 0.8 * parents_edu_f
+                    + 1.0 * log_wealth_scaled
+                    - 1.2 * is_rural,
+                ]
+            )
+            inst_probs = softmax(inst_logits, axis=1)
+            inst_idx = _categorical(rng, inst_probs)
+        else:
+            inst_idx = np.full(
+                n, INSTITUTION_LEVELS.index(education_institution), dtype=int
+            )
 
         # ------------------------------------------------------------------
         # 8. education_level  ~  Categorical(softmax(logits))  OR  do()
         # ------------------------------------------------------------------
-        inst_f = inst_idx.astype(float)
-        is_univ_or_elite = (inst_idx >= 2).astype(float)
-        is_elite = (inst_idx == 3).astype(float)
+        if education_level is None:
+            inst_f = inst_idx.astype(float)
+            is_univ_or_elite = (inst_idx >= 2).astype(float)
+            is_elite = (inst_idx == 3).astype(float)
 
-        edu_logits = np.column_stack(
-            [
-                np.zeros(n),
-                0.5 + 0.2 * parents_edu_f + 0.1 * ability,
-                2.0
-                + 0.4 * parents_edu_f
-                + 0.3 * ability
-                + 0.3 * log_wealth_scaled
-                - 0.3 * is_rural,
-                0.0
-                + 0.7 * parents_edu_f
-                + 0.8 * ability
-                + 0.7 * log_wealth_scaled
-                - 0.5 * is_rural
-                + 1.5 * is_univ_or_elite
-                + 0.8 * scholarship,
-                -2.0
-                + 0.6 * parents_edu_f
-                + 0.9 * ability
-                + 0.6 * log_wealth_scaled
-                - 0.6 * is_rural
-                + 1.2 * is_elite
-                + 0.5 * scholarship,
-                -4.0
-                + 0.5 * parents_edu_f
-                + 1.0 * ability
-                + 0.5 * log_wealth_scaled
-                - 0.8 * is_rural
-                + 1.0 * is_elite
-                + 0.4 * scholarship,
-            ]
-        )
-        edu_probs = softmax(edu_logits, axis=1)
-        edu_idx = _categorical(rng, edu_probs)
-
-        # Even under intervention, consume the observational education draw so that
-        # downstream RNG calls are aligned with the observational simulation. This
-        # supports sample-wise comparisons using common random numbers.
-        # i.e. setting education_level='X' and resamplig a row which already had
-        #  education_level='X' results in identical data for that row
-        if education_level is not None:
+            edu_logits = np.column_stack(
+                [
+                    np.zeros(n),
+                    0.5 + 0.2 * parents_edu_f + 0.1 * ability,
+                    2.0
+                    + 0.4 * parents_edu_f
+                    + 0.3 * ability
+                    + 0.3 * log_wealth_scaled
+                    - 0.3 * is_rural,
+                    0.0
+                    + 0.7 * parents_edu_f
+                    + 0.8 * ability
+                    + 0.7 * log_wealth_scaled
+                    - 0.5 * is_rural
+                    + 1.5 * is_univ_or_elite
+                    + 0.8 * scholarship,
+                    -2.0
+                    + 0.6 * parents_edu_f
+                    + 0.9 * ability
+                    + 0.6 * log_wealth_scaled
+                    - 0.6 * is_rural
+                    + 1.2 * is_elite
+                    + 0.5 * scholarship,
+                    -4.0
+                    + 0.5 * parents_edu_f
+                    + 1.0 * ability
+                    + 0.5 * log_wealth_scaled
+                    - 0.8 * is_rural
+                    + 1.0 * is_elite
+                    + 0.4 * scholarship,
+                ]
+            )
+            edu_probs = softmax(edu_logits, axis=1)
+            edu_idx = _categorical(rng, edu_probs)
+        else:
             edu_idx = np.full(
                 n, EDUCATION_LEVELS.index(education_level), dtype=int
             )
@@ -1398,7 +1406,7 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
 
         return df
 
-    return EDUCATION_LEVELS, simulate_dag
+    return (simulate_dag,)
 
 
 if __name__ == "__main__":
