@@ -838,8 +838,8 @@ app._unparsable_cell(
     for sample_num in mo.status.progress_bar(
         range(1, n_simulations.value + 1), title="Running modelling simulations"
     ):
-    
-    
+
+
 
 
     # test_data_for_contrasts: dict[str, pl.DataFrame] = {}
@@ -1001,7 +1001,7 @@ def _(mo):
 
 @app.cell
 def _(Final, Literal, np, pl, softmax, truncnorm):
-    from statsmodels.sandbox.distributions.otherdist import loc
+    # from statsmodels.sandbox.distributions.otherdist import loc
 
     """
     Simulate data from the education-income causal DAG using ancestral sampling
@@ -1121,8 +1121,8 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         parents_education: Literal[*EDUCATION_LEVELS] | None = None,
         test_scores: float | None = None,
         scholarship: bool | None = None,
-        population_log_wealth_mean: float | None = None,
-        population_log_wealth_sd: float | None = None,
+        population_log_income_mean: float | None = None,
+        population_log_income_sd: float | None = None,
     ) -> pl.DataFrame:
         """
         Simulate n observations from the education-income causal DAG via
@@ -1138,6 +1138,7 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
             Causal intervention do(education_level=e). Must be one of
             EDUCATION_LEVELS. When set, education_level is fixed for all
             observations rather than sampled from its observational distribution
+        TODO: finish documenting these params
 
         Returns
         -------
@@ -1267,8 +1268,8 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         # ------------------------------------------------------------------
         # 8. education_level  ~  Categorical(softmax(logits))  OR  do()
         # ------------------------------------------------------------------
+        inst_f = inst_idx.astype(float)
         if education_level is None:
-            inst_f = inst_idx.astype(float)
             is_univ_or_elite = (inst_idx >= 2).astype(float)
             is_elite = (inst_idx == 3).astype(float)
 
@@ -1364,8 +1365,12 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         # 12. survey_participation  ~  Bernoulli(sigmoid(logit))
         # ------------------------------------------------------------------
         log_income = np.log(income)
-        log_income_scaled = (log_income - log_income.mean()) / (
-            log_income.std() + 1e-8
+        if population_log_income_mean is None:
+            population_log_income_mean = log_income.mean()
+        if population_log_income_sd is None:
+            population_log_income_sd = log_income.std()
+        log_income_scaled = (log_income - population_log_income_mean) / (
+            population_log_income_sd + 1e-8
         )
         survey_logit = (
             -1.5 + 0.3 * edu_f + 0.2 * log_income_scaled - 0.4 * is_rural
