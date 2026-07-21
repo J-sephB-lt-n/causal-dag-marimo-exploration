@@ -24,7 +24,7 @@ def _():
     import polars as pl
     import xgboost as xgb
     from scipy.special import softmax
-    from scipy.stats import truncnorm
+    from scipy.stats import gaussian_kde, truncnorm
     from pgmpy.base import DAG
 
     return (
@@ -32,6 +32,7 @@ def _():
         Final,
         Literal,
         alt,
+        gaussian_kde,
         json,
         mo,
         np,
@@ -872,14 +873,384 @@ def _(mo):
 
 
 @app.cell
-def _(pl, simulate_dag):
-    population_size: int = 9999
-    observed_population: pl.DataFrame = simulate_dag(n=9999)
+def _(EDUCATION_LEVELS: "Final[tuple[str, ...]]", pl, simulate_dag):
+    population_size: int = 9_999
+    seed = 3415192
+    observed_population: pl.DataFrame = simulate_dag(n=population_size, seed=seed)
+    interven_populations: dict[str, pl.DataFrame] = {}
+    for edu_level in EDUCATION_LEVELS:
+        interven_populations[edu_level] = simulate_dag(
+            n=population_size,
+            education_level=edu_level,
+            seed=seed,
+        )
+    return interven_populations, observed_population
+
+
+@app.cell(hide_code=True)
+def _(
+    EDUCATION_LEVELS: "Final[tuple[str, ...]]",
+    alt,
+    gaussian_kde,
+    interven_populations: "dict[str, pl.DataFrame]",
+    np,
+    observed_population: "pl.DataFrame",
+    pl,
+):
+    # ------------------------------------------------------------
+    # Shared x-domain
+    # ------------------------------------------------------------
+
+    all_income_arrays = [
+        observed_population["income"].to_numpy(),
+        *[
+            population["income"].to_numpy()
+            for population in interven_populations.values()
+        ],
+    ]
+
+    income_min = min(float(values.min()) for values in all_income_arrays)
+    income_max = max(float(values.max()) for values in all_income_arrays)
+    income_max = 100_000
+
+    # One common evaluation grid for every density.
+    # Because income is highly right-skewed, 400–800 points is usually enough.
+    x_grid = np.linspace(income_min, income_max, 600)
+
+
+    # ------------------------------------------------------------
+    # Precompute KDEs
+    # ------------------------------------------------------------
+
+
+    def kde_rows(
+        income: np.ndarray,
+        education_level: str,
+        population_type: str,
+    ) -> pl.DataFrame:
+        income = income[np.isfinite(income)]
+
+        if len(income) < 2 or np.all(income == income[0]):
+            density = np.zeros_like(x_grid)
+        else:
+            density = gaussian_kde(income)(x_grid)
+
+        return pl.DataFrame(
+            {
+                "income": x_grid,
+                "density": density,
+                "education_level": education_level,
+                "population_type": population_type,
+            }
+        )
+
+
+    observed_density_data = pl.concat(
+        [
+            kde_rows(
+                income=observed_population.filter(
+                    pl.col("education_level") == edu_level
+                )["income"].to_numpy(),
+                education_level=edu_level,
+                population_type="Observed",
+            )
+            for edu_level in EDUCATION_LEVELS
+        ]
+    )
+
+    interventional_density_data = pl.concat(
+        [
+            kde_rows(
+                income=interven_populations[edu_level]["income"].to_numpy(),
+                education_level=edu_level,
+                population_type="Interventional",
+            )
+            for edu_level in EDUCATION_LEVELS
+        ]
+    )
+
+
+    # ------------------------------------------------------------
+    # Plot
+    # ------------------------------------------------------------
+
+    education_domain = list(EDUCATION_LEVELS)
+
+    education_range = [
+        "#4C78A8",
+        "#F58518",
+        "#E45756",
+        "#72B7B2",
+        "#54A24B",
+        "#B279A2",
+    ]
+
+
+    def density_chart(
+        data: pl.DataFrame,
+        title: str,
+    ) -> alt.Chart:
+        return (
+            alt.Chart(data)
+            .mark_area(
+                opacity=0.25,
+                line=True,
+                interpolate="monotone",
+            )
+            .encode(
+                x=alt.X(
+                    "income:Q",
+                    title="Monthly income (ZAR)",
+                    scale=alt.Scale(
+                        domain=[income_min, income_max],
+                        nice=False,
+                    ),
+                    axis=alt.Axis(format=",.0f"),
+                ),
+                y=alt.Y(
+                    "density:Q",
+                    title="Density",
+                    stack=None,
+                ),
+                color=alt.Color(
+                    "education_level:N",
+                    title="Education level",
+                    sort=education_domain,
+                    scale=alt.Scale(
+                        domain=education_domain,
+                        range=education_range,
+                    ),
+                ),
+                tooltip=[
+                    alt.Tooltip(
+                        "education_level:N",
+                        title="Education level",
+                    ),
+                    alt.Tooltip(
+                        "income:Q",
+                        title="Monthly income",
+                        format=",.0f",
+                    ),
+                    alt.Tooltip(
+                        "density:Q",
+                        title="Density",
+                        format=".6f",
+                    ),
+                ],
+            )
+            .properties(
+                width=850,
+                height=250,
+                title=title,
+            )
+        )
+
+
+    observed_chart = density_chart(
+        observed_density_data,
+        "Observed: P(income | education level)",
+    )
+
+    interventional_chart = density_chart(
+        interventional_density_data,
+        "Interventional: P(income | do(education level))",
+    )
+
+    dbns_chart = (
+        alt.vconcat(
+            observed_chart,
+            interventional_chart,
+            spacing=25,
+        )
+        .resolve_scale(
+            x="shared",
+            color="shared",
+            y="independent",
+        )
+        .properties(title="Observed versus interventional income distributions")
+    )
+
+    dbns_chart
     return
 
 
-@app.cell
-def _():
+@app.cell(hide_code=True)
+def _(
+    EDUCATION_LEVELS: "Final[tuple[str, ...]]",
+    alt,
+    gaussian_kde,
+    interven_populations: "dict[str, pl.DataFrame]",
+    np,
+    observed_population: "pl.DataFrame",
+    pl,
+):
+    def make_kde_data(
+        observed_population: pl.DataFrame,
+        intervention_populations: dict[str, pl.DataFrame],
+        education_levels: tuple[str, ...],
+        *,
+        grid_points: int = 500,
+        trim_quantiles: tuple[float, float] | None = None,
+    ) -> pl.DataFrame:
+        """
+        Create precomputed KDE data for observed and interventional income.
+
+        Each education level gets its own x-grid and therefore its own
+        minimum and maximum x-axis values.
+
+        Set trim_quantiles=(0.001, 0.999), for example, to prevent a few extreme
+        income values from dominating each panel's x-axis.
+        """
+        frames: list[pl.DataFrame] = []
+
+        for edu_level in education_levels:
+            observed_income = (
+                observed_population.filter(pl.col("education_level") == edu_level)
+                .get_column("income")
+                .to_numpy()
+            )
+
+            interventional_income = (
+                intervention_populations[edu_level].get_column("income").to_numpy()
+            )
+
+            observed_income = observed_income[np.isfinite(observed_income)]
+            interventional_income = interventional_income[
+                np.isfinite(interventional_income)
+            ]
+
+            combined_income = np.concatenate(
+                [observed_income, interventional_income]
+            )
+
+            if trim_quantiles is None:
+                x_min = float(combined_income.min())
+                x_max = float(combined_income.max())
+            else:
+                lower_q, upper_q = trim_quantiles
+                x_min, x_max = np.quantile(
+                    combined_income,
+                    [lower_q, upper_q],
+                )
+
+            if x_min == x_max:
+                padding = max(abs(x_min) * 0.01, 1.0)
+                x_min -= padding
+                x_max += padding
+
+            x_grid = np.linspace(x_min, x_max, grid_points)
+
+            for population_type, income in (
+                ("Observed", observed_income),
+                ("Interventional", interventional_income),
+            ):
+                if len(income) < 2 or np.all(income == income[0]):
+                    density = np.zeros_like(x_grid)
+                else:
+                    density = gaussian_kde(income)(x_grid)
+
+                frames.append(
+                    pl.DataFrame(
+                        {
+                            "education_level": edu_level,
+                            "population_type": population_type,
+                            "income": x_grid,
+                            "density": density,
+                        }
+                    )
+                )
+
+        return pl.concat(frames)
+
+
+    density_data = make_kde_data(
+        observed_population=observed_population,
+        intervention_populations=interven_populations,
+        education_levels=EDUCATION_LEVELS,
+        grid_points=500,
+        trim_quantiles=(0.00, 0.99),
+    )
+
+    education_order = list(EDUCATION_LEVELS)
+
+    charts = (
+        alt.Chart(density_data)
+        .mark_area(
+            opacity=0.28,
+            line=True,
+            interpolate="monotone",
+        )
+        .encode(
+            x=alt.X(
+                "income:Q",
+                title="Monthly income (ZAR)",
+                axis=alt.Axis(format=",.0f"),
+            ),
+            y=alt.Y(
+                "density:Q",
+                title="Density",
+                stack=None,
+            ),
+            color=alt.Color(
+                "population_type:N",
+                title="Population",
+                scale=alt.Scale(
+                    domain=["Observed", "Interventional"],
+                    range=["#4C78A8", "#F58518"],
+                ),
+            ),
+            tooltip=[
+                alt.Tooltip(
+                    "education_level:N",
+                    title="Education level",
+                ),
+                alt.Tooltip(
+                    "population_type:N",
+                    title="Population",
+                ),
+                alt.Tooltip(
+                    "income:Q",
+                    title="Monthly income",
+                    format=",.0f",
+                ),
+                alt.Tooltip(
+                    "density:Q",
+                    title="Density",
+                    format=".6f",
+                ),
+            ],
+        )
+        .properties(
+            width=420,
+            height=220,
+        )
+        .facet(
+            facet=alt.Facet(
+                "education_level:N",
+                title=None,
+                sort=education_order,
+                header=alt.Header(
+                    labelFontSize=13,
+                    labelFontWeight="bold",
+                    labelLimit=400,
+                ),
+            ),
+            columns=2,
+            title=alt.Title(
+                "Observed versus interventional income distributions",
+                subtitle=(
+                    "Each panel compares P(income | education level) with "
+                    "P(income | do(education level))"
+                ),
+            ),
+        )
+        .resolve_scale(
+            x="independent",
+            y="independent",
+        )
+    )
+
+    charts
     return
 
 
@@ -1219,6 +1590,11 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         Simulate n observations from the education-income causal DAG via
         ancestral sampling.
 
+        Even if there are fixed interventions on variables (e.g. education_level), I
+        am still always doing the random draws, which keeps the random-number-stream
+        comparable between intervention and non-intervention simulations with the
+        same seed.
+
         Parameters
         ----------
         n : int
@@ -1245,17 +1621,15 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         # ------------------------------------------------------------------
         # 1. ability_motivation  ~  N(0, 1)
         # ------------------------------------------------------------------
-        if ability_motivation is None:
-            ability = rng.standard_normal(n)
-        else:
+        ability = rng.standard_normal(n)
+        if ability_motivation is not None:
             ability = np.full(n, ability_motivation, dtype=float)
 
         # ------------------------------------------------------------------
         # 2. location  ~  Categorical(province_weights)
         # ------------------------------------------------------------------
-        if location is None:
-            location_idx = rng.choice(len(PROVINCES), size=n, p=PROVINCE_WEIGHTS)
-        else:
+        location_idx = rng.choice(len(PROVINCES), size=n, p=PROVINCE_WEIGHTS)
+        if location is not None:
             location_idx = np.full(n, PROVINCES.index(location), dtype=int)
         is_rural = PROVINCE_IS_RURAL[location_idx]
         wage_scalar = PROVINCE_WAGE_SCALAR[location_idx]
@@ -1263,11 +1637,10 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         # ------------------------------------------------------------------
         # 3. parents_education  ~  Categorical(SA marginals)
         # ------------------------------------------------------------------
-        if parents_education is None:
-            parents_edu_idx = rng.choice(
-                len(EDUCATION_LEVELS), size=n, p=PARENTS_EDU_PROBS
-            )
-        else:
+        parents_edu_idx = rng.choice(
+            len(EDUCATION_LEVELS), size=n, p=PARENTS_EDU_PROBS
+        )
+        if parents_education is not None:
             parents_edu_idx = np.full(
                 n, EDUCATION_LEVELS.index(parents_education), dtype=int
             )
@@ -1275,13 +1648,11 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         # ------------------------------------------------------------------
         # 4. family_wealth  ~  LogNormal(mu[parents_edu], sigma[parents_edu])
         # ------------------------------------------------------------------
-        if family_wealth is None:
-            wealth_mu_vec = WEALTH_MU[parents_edu_idx]
-            wealth_sigma_vec = WEALTH_SIGMA[parents_edu_idx]
-            family_wealth = rng.lognormal(
-                mean=wealth_mu_vec, sigma=wealth_sigma_vec
-            )
-        else:
+
+        wealth_mu_vec = WEALTH_MU[parents_edu_idx]
+        wealth_sigma_vec = WEALTH_SIGMA[parents_edu_idx]
+        family_wealth = rng.lognormal(mean=wealth_mu_vec, sigma=wealth_sigma_vec)
+        if family_wealth is not None:
             family_wealth = np.full(n, family_wealth, dtype=float)
         log_wealth = np.log(family_wealth)
         log_wealth_scaled = (log_wealth - POP_LOG_WEALTH_MEAN) / (
@@ -1291,67 +1662,62 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         # ------------------------------------------------------------------
         # 5. test_scores  ~  TruncatedNormal(50 + 15*ability, 15) in [0, 100]
         # ------------------------------------------------------------------
-        if test_scores is None:
-            ts_mu = 50.0 + 15.0 * ability
-            ts_sigma = 15.0
-            a_clip = (0.0 - ts_mu) / ts_sigma
-            b_clip = (100.0 - ts_mu) / ts_sigma
-            test_scores = truncnorm.rvs(
-                a_clip,
-                b_clip,
-                loc=ts_mu,
-                scale=ts_sigma,
-                random_state=rng.integers(2**31),
-            )
-        else:
+        ts_mu = 50.0 + 15.0 * ability
+        ts_sigma = 15.0
+        a_clip = (0.0 - ts_mu) / ts_sigma
+        b_clip = (100.0 - ts_mu) / ts_sigma
+        test_scores = truncnorm.rvs(
+            a_clip,
+            b_clip,
+            loc=ts_mu,
+            scale=ts_sigma,
+            random_state=rng.integers(2**31),
+        )
+        if test_scores is not None:
             test_scores = np.full(n, test_scores, dtype=float)
 
         # ------------------------------------------------------------------
         # 6. scholarship  ~  Bernoulli(sigmoid(logit))
         # ------------------------------------------------------------------
-        if scholarship is None:
-            test_scores_scaled = (test_scores - 50.0) / 15.0
-            scholarship_logit = (
-                -3.8
-                - 0.8 * log_wealth_scaled
-                + 0.6 * ability
-                + 0.8 * test_scores_scaled
-            )
-            scholarship = (rng.random(n) < _sigmoid(scholarship_logit)).astype(
-                float
-            )
-        else:
+        test_scores_scaled = (test_scores - 50.0) / 15.0
+        scholarship_logit = (
+            -3.8
+            - 0.8 * log_wealth_scaled
+            + 0.6 * ability
+            + 0.8 * test_scores_scaled
+        )
+        scholarship = (rng.random(n) < _sigmoid(scholarship_logit)).astype(float)
+        if scholarship is not None:
             scholarship = np.full(n, scholarship, dtype=bool)
 
         # ------------------------------------------------------------------
         # 7. education_institution  ~  Categorical(softmax(logits))
         #    0=none, 1=community_college, 2=university, 3=elite_university
         # ------------------------------------------------------------------
-        if education_institution is None:
-            parents_edu_f = parents_edu_idx.astype(float)
-            inst_logits = np.column_stack(
-                [
-                    np.zeros(n),
-                    1.5
-                    + 0.3 * ability
-                    + 0.2 * parents_edu_f
-                    + 0.3 * log_wealth_scaled
-                    - 0.5 * is_rural,
-                    -0.5
-                    + 0.8 * ability
-                    + 0.6 * parents_edu_f
-                    + 0.6 * log_wealth_scaled
-                    - 0.8 * is_rural,
-                    -3.0
-                    + 1.2 * ability
-                    + 0.8 * parents_edu_f
-                    + 1.0 * log_wealth_scaled
-                    - 1.2 * is_rural,
-                ]
-            )
-            inst_probs = softmax(inst_logits, axis=1)
-            inst_idx = _categorical(rng, inst_probs)
-        else:
+        parents_edu_f = parents_edu_idx.astype(float)
+        inst_logits = np.column_stack(
+            [
+                np.zeros(n),
+                1.5
+                + 0.3 * ability
+                + 0.2 * parents_edu_f
+                + 0.3 * log_wealth_scaled
+                - 0.5 * is_rural,
+                -0.5
+                + 0.8 * ability
+                + 0.6 * parents_edu_f
+                + 0.6 * log_wealth_scaled
+                - 0.8 * is_rural,
+                -3.0
+                + 1.2 * ability
+                + 0.8 * parents_edu_f
+                + 1.0 * log_wealth_scaled
+                - 1.2 * is_rural,
+            ]
+        )
+        inst_probs = softmax(inst_logits, axis=1)
+        inst_idx = _categorical(rng, inst_probs)
+        if education_institution is not None:
             inst_idx = np.full(
                 n, INSTITUTION_LEVELS.index(education_institution), dtype=int
             )
@@ -1360,45 +1726,43 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         # 8. education_level  ~  Categorical(softmax(logits))  OR  do()
         # ------------------------------------------------------------------
         inst_f = inst_idx.astype(float)
-        if education_level is None:
-            is_univ_or_elite = (inst_idx >= 2).astype(float)
-            is_elite = (inst_idx == 3).astype(float)
-
-            edu_logits = np.column_stack(
-                [
-                    np.zeros(n),
-                    0.5 + 0.2 * parents_edu_f + 0.1 * ability,
-                    2.0
-                    + 0.4 * parents_edu_f
-                    + 0.3 * ability
-                    + 0.3 * log_wealth_scaled
-                    - 0.3 * is_rural,
-                    0.0
-                    + 0.7 * parents_edu_f
-                    + 0.8 * ability
-                    + 0.7 * log_wealth_scaled
-                    - 0.5 * is_rural
-                    + 1.5 * is_univ_or_elite
-                    + 0.8 * scholarship,
-                    -2.0
-                    + 0.6 * parents_edu_f
-                    + 0.9 * ability
-                    + 0.6 * log_wealth_scaled
-                    - 0.6 * is_rural
-                    + 1.2 * is_elite
-                    + 0.5 * scholarship,
-                    -4.0
-                    + 0.5 * parents_edu_f
-                    + 1.0 * ability
-                    + 0.5 * log_wealth_scaled
-                    - 0.8 * is_rural
-                    + 1.0 * is_elite
-                    + 0.4 * scholarship,
-                ]
-            )
-            edu_probs = softmax(edu_logits, axis=1)
-            edu_idx = _categorical(rng, edu_probs)
-        else:
+        is_univ_or_elite = (inst_idx >= 2).astype(float)
+        is_elite = (inst_idx == 3).astype(float)
+        edu_logits = np.column_stack(
+            [
+                np.zeros(n),
+                0.5 + 0.2 * parents_edu_f + 0.1 * ability,
+                2.0
+                + 0.4 * parents_edu_f
+                + 0.3 * ability
+                + 0.3 * log_wealth_scaled
+                - 0.3 * is_rural,
+                0.0
+                + 0.7 * parents_edu_f
+                + 0.8 * ability
+                + 0.7 * log_wealth_scaled
+                - 0.5 * is_rural
+                + 1.5 * is_univ_or_elite
+                + 0.8 * scholarship,
+                -2.0
+                + 0.6 * parents_edu_f
+                + 0.9 * ability
+                + 0.6 * log_wealth_scaled
+                - 0.6 * is_rural
+                + 1.2 * is_elite
+                + 0.5 * scholarship,
+                -4.0
+                + 0.5 * parents_edu_f
+                + 1.0 * ability
+                + 0.5 * log_wealth_scaled
+                - 0.8 * is_rural
+                + 1.0 * is_elite
+                + 0.4 * scholarship,
+            ]
+        )
+        edu_probs = softmax(edu_logits, axis=1)
+        edu_idx = _categorical(rng, edu_probs)
+        if education_level is not None:
             edu_idx = np.full(
                 n, EDUCATION_LEVELS.index(education_level), dtype=int
             )
@@ -1450,7 +1814,7 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
             + 0.10 * ability
             + np.log(wage_scalar)
         )
-        income = rng.lognormal(mean=income_log_mu, sigma=2)
+        income = rng.lognormal(mean=income_log_mu, sigma=0.5)
 
         # ------------------------------------------------------------------
         # 12. survey_participation  ~  Bernoulli(sigmoid(logit))
@@ -1512,7 +1876,7 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
             "income_edu5": -99,
         }
 
-    return (simulate_dag,)
+    return EDUCATION_LEVELS, simulate_dag
 
 
 if __name__ == "__main__":
