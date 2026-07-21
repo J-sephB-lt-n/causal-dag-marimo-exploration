@@ -27,7 +27,20 @@ def _():
     from scipy.stats import truncnorm
     from pgmpy.base import DAG
 
-    return DAG, Final, Literal, alt, json, mo, np, nx, pl, softmax, truncnorm
+    return (
+        DAG,
+        Final,
+        Literal,
+        alt,
+        json,
+        mo,
+        np,
+        nx,
+        pl,
+        softmax,
+        truncnorm,
+        xgb,
+    )
 
 
 @app.cell
@@ -368,126 +381,6 @@ def _(mo):
 @app.cell(column=1, hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Controls
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    include_var__education_institution = mo.ui.checkbox(
-        label="Most Recent Education Institution Attended"
-    )
-    include_var__parents_education = mo.ui.checkbox(
-        label="Parents Education Level"
-    )
-    include_var__family_wealth = mo.ui.checkbox(label="Family Wealth")
-    include_var__profess_network = mo.ui.checkbox(
-        label="Access to Professional Network"
-    )
-    include_var__survey_participation = mo.ui.checkbox(
-        label="Survey participation"
-    )
-    include_var__occupation = mo.ui.checkbox(label="Occupation")
-    include_var__test_scores = mo.ui.checkbox(label="Most Recent Test Scores")
-    include_var__location = mo.ui.checkbox(label="Location")
-    include_var__scholarship = mo.ui.checkbox(
-        label="Received scholarship for most recent study"
-    )
-
-    run_model_simulations = mo.ui.run_button(label="Run model simulations")
-    n_samples = mo.ui.number(
-        start=1, stop=100_000, value=999, label="Number of samples"
-    )
-    n_simulations = mo.ui.number(
-        start=1, stop=100_000, value=50, label="Number of simulations"
-    )
-
-    mo.vstack(
-        [
-            mo.md("## Variables to Include in Model"),
-            include_var__education_institution,
-            include_var__parents_education,
-            include_var__family_wealth,
-            include_var__profess_network,
-            include_var__survey_participation,
-            include_var__occupation,
-            include_var__test_scores,
-            include_var__location,
-            include_var__scholarship,
-            n_samples,
-            n_simulations,
-            run_model_simulations,
-        ]
-    )
-    return (
-        include_var__education_institution,
-        include_var__family_wealth,
-        include_var__location,
-        include_var__occupation,
-        include_var__parents_education,
-        include_var__profess_network,
-        include_var__scholarship,
-        include_var__survey_participation,
-        include_var__test_scores,
-    )
-
-
-@app.cell(hide_code=True)
-def _(
-    include_var__education_institution,
-    include_var__family_wealth,
-    include_var__location,
-    include_var__occupation,
-    include_var__parents_education,
-    include_var__profess_network,
-    include_var__scholarship,
-    include_var__survey_participation,
-    include_var__test_scores,
-):
-    vars_in_model: list[str] = []
-    for vbl_name, checkbox in (
-        ("education_institution", include_var__education_institution),
-        ("parents_education", include_var__parents_education),
-        ("family_wealth", include_var__family_wealth),
-        ("profess_network", include_var__profess_network),
-        ("survey_participation", include_var__survey_participation),
-        ("occupation", include_var__occupation),
-        ("test_scores", include_var__test_scores),
-        ("location", include_var__location),
-        ("scholarship", include_var__scholarship),
-    ):
-        if checkbox.value:
-            vars_in_model.append(vbl_name)
-    print("variables included in model: ", ", ".join(vars_in_model))
-    return (vars_in_model,)
-
-
-@app.cell
-def _(pgmpy_dag):
-    import pgmpy
-    from pgmpy.identification import Adjustment
-
-    # https://pgmpy.org/examples/Causal_Games.html
-    needs_adjustment: bool = Adjustment().validate(pgmpy_dag)
-    print(f"Are there any active backdoor paths? {not needs_adjustment}")
-
-    adjusted_graphs, success = Adjustment(variant="all").identify(pgmpy_dag)
-
-    print(f"No. of potential adjustment sets: {len(adjusted_graphs)}")
-
-    all_backdoor_adjustment_sets = [
-        str(graph.get_role("adjustment")) for graph in adjusted_graphs
-    ]
-    print("Possible backdoor adjustment sets:")
-    for adjustment_set in all_backdoor_adjustment_sets:
-        print(adjustment_set)
-    return
-
-
-@app.cell(column=2, hide_code=True)
-def _(mo):
-    mo.md(r"""
     # Results
     """)
     return
@@ -805,25 +698,49 @@ def _(mo):
     return
 
 
-app._unparsable_cell(
-    r"""
+@app.cell
+def _(
+    mo,
+    n_samples,
+    pl,
+    run_model_simulations,
+    simulate_cates,
+    simulate_dag,
+    vars_in_model: list[str],
+    xgb,
+):
     mo.stop(not run_model_simulations.value)
 
-    mean_income_per_education_level = {
-        education_level: []  # 1 value stored for each simulation
-        for education_level in EDUCATION_LEVELS
-    }
+    # mean_income_per_education_level = {
+    #    education_level: []  # 1 value stored for each simulation
+    #    for education_level in EDUCATION_LEVELS
+    # }
 
-    all_datasets: list[pl.DataFrame] = []
+    # all_datasets: list[pl.DataFrame] = []
 
     train_data = simulate_dag(
         n=n_samples.value,
         seed=271828,
     )
+
+    # annoying, but this is an artifact of bad decisions I made on the DAG simulation function:
+    pop_mean_log_income: float = train_data.select(
+        pl.col("income").log().mean()
+    ).item()
+    pop_std_log_income: float = train_data.select(
+        pl.col("income").log().std()
+    ).item()
+
     TEST_DATA_SEED = 3141592
     test_data = simulate_dag(
         n=10_000,
         seed=TEST_DATA_SEED,
+        population_log_income_mean=pop_mean_log_income,
+        population_log_income_sd=pop_std_log_income,
+    )
+    test_data = test_data.with_columns(
+        pl.lit(pop_mean_log_income).alias("population_log_income_mean"),
+        pl.lit(pop_std_log_income).alias("population_log_income_sd"),
     )
 
     model = xgb.XGBRegressor(
@@ -835,12 +752,45 @@ app._unparsable_cell(
         y=train_data.select("income"),
     )
 
-    for sample_num in mo.status.progress_bar(
-        range(1, n_simulations.value + 1), title="Running modelling simulations"
-    ):
+    test_data = test_data.lazy().with_columns(
+        pl.struct(
+            "ability_motivation",
+            "education_institution",
+            "family_wealth",
+            "location",
+            "parents_education",
+            "test_scores",
+            "scholarship",
+            "population_log_income_mean",
+            "population_log_income_sd",
+        ).map_elements(
+            lambda row: simulate_cates(**row),
+            return_dtype=pl.Struct(
+                {
+                    "income_edu0": pl.Float64,
+                    "income_edu1": pl.Float64,
+                    "income_edu2": pl.Float64,
+                    "income_edu3": pl.Float64,
+                    "income_edu4": pl.Float64,
+                    "income_edu5": pl.Float64,
+                }
+            ),
+        )
+    )
 
-
-
+    # result = (
+    #    df.lazy()
+    #    .with_columns(
+    #        pl.struct("price", "quantity", "category")
+    #        .map_elements(
+    #            lambda row: calculate_outputs(**row),
+    #            return_dtype=output_dtype,
+    #        )
+    #        .alias("_calculated")
+    #    )
+    #    .unnest("_calculated")
+    #    .collect()
+    # )
 
     # test_data_for_contrasts: dict[str, pl.DataFrame] = {}
 
@@ -850,7 +800,6 @@ app._unparsable_cell(
     #        education_level=education_level,
     #        seed=TEST_DATA_SEED,
     #    )
-
 
 
     # plot_df = pl.DataFrame(
@@ -905,18 +854,158 @@ app._unparsable_cell(
     # )
 
     # mo.ui.altair_chart(simchart)
-    """,
-    name="_"
-)
+    return (test_data,)
 
 
 @app.cell(hide_code=True)
-def _(test_data_for_contrasts):
-    test_data_for_contrasts
+def _(test_data):
+    test_data
+    return
+
+
+@app.cell(column=2, hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # The Difference between Conditioning and Intervening
+    """)
+    return
+
+
+@app.cell
+def _(pl, simulate_dag):
+    population_size: int = 9999
+    observed_population: pl.DataFrame = simulate_dag(n=9999)
+    return
+
+
+@app.cell
+def _():
     return
 
 
 @app.cell(column=3, hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # Controls
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    include_var__education_institution = mo.ui.checkbox(
+        label="Most Recent Education Institution Attended"
+    )
+    include_var__parents_education = mo.ui.checkbox(
+        label="Parents Education Level"
+    )
+    include_var__family_wealth = mo.ui.checkbox(label="Family Wealth")
+    include_var__profess_network = mo.ui.checkbox(
+        label="Access to Professional Network"
+    )
+    include_var__survey_participation = mo.ui.checkbox(
+        label="Survey participation"
+    )
+    include_var__occupation = mo.ui.checkbox(label="Occupation")
+    include_var__test_scores = mo.ui.checkbox(label="Most Recent Test Scores")
+    include_var__location = mo.ui.checkbox(label="Location")
+    include_var__scholarship = mo.ui.checkbox(
+        label="Received scholarship for most recent study"
+    )
+
+    run_model_simulations = mo.ui.run_button(label="Run model simulations")
+    n_samples = mo.ui.number(
+        start=1, stop=100_000, value=999, label="Number of samples"
+    )
+    n_simulations = mo.ui.number(
+        start=1, stop=100_000, value=50, label="Number of simulations"
+    )
+
+    mo.vstack(
+        [
+            mo.md("## Variables to Include in Model"),
+            include_var__education_institution,
+            include_var__parents_education,
+            include_var__family_wealth,
+            include_var__profess_network,
+            include_var__survey_participation,
+            include_var__occupation,
+            include_var__test_scores,
+            include_var__location,
+            include_var__scholarship,
+            n_samples,
+            n_simulations,
+            run_model_simulations,
+        ]
+    )
+    return (
+        include_var__education_institution,
+        include_var__family_wealth,
+        include_var__location,
+        include_var__occupation,
+        include_var__parents_education,
+        include_var__profess_network,
+        include_var__scholarship,
+        include_var__survey_participation,
+        include_var__test_scores,
+        n_samples,
+        run_model_simulations,
+    )
+
+
+@app.cell(hide_code=True)
+def _(
+    include_var__education_institution,
+    include_var__family_wealth,
+    include_var__location,
+    include_var__occupation,
+    include_var__parents_education,
+    include_var__profess_network,
+    include_var__scholarship,
+    include_var__survey_participation,
+    include_var__test_scores,
+):
+    vars_in_model: list[str] = []
+    for vbl_name, checkbox in (
+        ("education_institution", include_var__education_institution),
+        ("parents_education", include_var__parents_education),
+        ("family_wealth", include_var__family_wealth),
+        ("profess_network", include_var__profess_network),
+        ("survey_participation", include_var__survey_participation),
+        ("occupation", include_var__occupation),
+        ("test_scores", include_var__test_scores),
+        ("location", include_var__location),
+        ("scholarship", include_var__scholarship),
+    ):
+        if checkbox.value:
+            vars_in_model.append(vbl_name)
+    print("variables included in model: ", ", ".join(vars_in_model))
+    return (vars_in_model,)
+
+
+@app.cell
+def _(pgmpy_dag):
+    import pgmpy
+    from pgmpy.identification import Adjustment
+
+    # https://pgmpy.org/examples/Causal_Games.html
+    needs_adjustment: bool = Adjustment().validate(pgmpy_dag)
+    print(f"Are there any active backdoor paths? {not needs_adjustment}")
+
+    adjusted_graphs, success = Adjustment(variant="all").identify(pgmpy_dag)
+
+    print(f"No. of potential adjustment sets: {len(adjusted_graphs)}")
+
+    all_backdoor_adjustment_sets = [
+        str(graph.get_role("adjustment")) for graph in adjusted_graphs
+    ]
+    print("Possible backdoor adjustment sets:")
+    for adjustment_set in all_backdoor_adjustment_sets:
+        print(adjustment_set)
+    return
+
+
+@app.cell(column=4, hide_code=True)
 def _(mo):
     mo.md(r"""
     # Testable Implications
@@ -991,7 +1080,7 @@ def _(pl, sim_data):
     return
 
 
-@app.cell(column=4, hide_code=True)
+@app.cell(column=5, hide_code=True)
 def _(mo):
     mo.md(r"""
     # Internals
@@ -1088,6 +1177,10 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         np.array([3_000, 10_000, 15_000, 30_000, 100_000], dtype=float)
     )
 
+    POP_LOG_WEALTH_MEAN: Final[float] = 10.5
+    POP_LOG_WEALTH_STD: Final[float] = 1.4
+    POP_LOG_INCOME_MEAN: Final[float] = 10
+    POP_LOG_INCOME_STD: Final[float] = 2.15
 
     # ---------------------------------------------------------------------------
     # Helpers
@@ -1112,7 +1205,7 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
 
     def simulate_dag(
         n: int,
-        seed: int,
+        seed: int | None = None,
         education_level: str | None = None,
         ability_motivation: float | None = None,
         education_institution: Literal[*INSTITUTION_LEVELS] | None = None,
@@ -1121,8 +1214,6 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         parents_education: Literal[*EDUCATION_LEVELS] | None = None,
         test_scores: float | None = None,
         scholarship: bool | None = None,
-        population_log_income_mean: float | None = None,
-        population_log_income_sd: float | None = None,
     ) -> pl.DataFrame:
         """
         Simulate n observations from the education-income causal DAG via
@@ -1132,7 +1223,7 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         ----------
         n : int
             Number of samples to generate.
-        seed : int
+        seed : int | None
             Random seed for reproducibility.
         education_level : str or None
             Causal intervention do(education_level=e). Must be one of
@@ -1193,8 +1284,8 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         else:
             family_wealth = np.full(n, family_wealth, dtype=float)
         log_wealth = np.log(family_wealth)
-        log_wealth_scaled = (log_wealth - log_wealth.mean()) / (
-            log_wealth.std() + 1e-8
+        log_wealth_scaled = (log_wealth - POP_LOG_WEALTH_MEAN) / (
+            POP_LOG_WEALTH_STD + 1e-8
         )
 
         # ------------------------------------------------------------------
@@ -1365,12 +1456,8 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         # 12. survey_participation  ~  Bernoulli(sigmoid(logit))
         # ------------------------------------------------------------------
         log_income = np.log(income)
-        if population_log_income_mean is None:
-            population_log_income_mean = log_income.mean()
-        if population_log_income_sd is None:
-            population_log_income_sd = log_income.std()
-        log_income_scaled = (log_income - population_log_income_mean) / (
-            population_log_income_sd + 1e-8
+        log_income_scaled = (log_income - POP_LOG_INCOME_MEAN) / (
+            POP_LOG_INCOME_STD + 1e-8
         )
         survey_logit = (
             -1.5 + 0.3 * edu_f + 0.2 * log_income_scaled - 0.4 * is_rural
@@ -1410,6 +1497,20 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
         )
 
         return df
+
+
+    def mean_edu_incomes_via_simulation(
+        **kwargs,
+    ) -> float:
+        # sim_results: pl.DataFrame =
+        return {
+            "income_edu0": -99,
+            "income_edu1": -99,
+            "income_edu2": -99,
+            "income_edu3": -99,
+            "income_edu4": -99,
+            "income_edu5": -99,
+        }
 
     return (simulate_dag,)
 
