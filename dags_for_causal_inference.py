@@ -701,11 +701,12 @@ def _(mo):
 
 @app.cell
 def _(
+    mean_edu_incomes_via_simulation,
     mo,
     n_samples,
+    n_simulations,
     pl,
     run_model_simulations,
-    simulate_cates,
     simulate_dag,
     vars_in_model: list[str],
     xgb,
@@ -724,26 +725,6 @@ def _(
         seed=271828,
     )
 
-    # annoying, but this is an artifact of bad decisions I made on the DAG simulation function:
-    pop_mean_log_income: float = train_data.select(
-        pl.col("income").log().mean()
-    ).item()
-    pop_std_log_income: float = train_data.select(
-        pl.col("income").log().std()
-    ).item()
-
-    TEST_DATA_SEED = 3141592
-    test_data = simulate_dag(
-        n=10_000,
-        seed=TEST_DATA_SEED,
-        population_log_income_mean=pop_mean_log_income,
-        population_log_income_sd=pop_std_log_income,
-    )
-    test_data = test_data.with_columns(
-        pl.lit(pop_mean_log_income).alias("population_log_income_mean"),
-        pl.lit(pop_std_log_income).alias("population_log_income_sd"),
-    )
-
     model = xgb.XGBRegressor(
         tree_method="hist",
         enable_categorical=True,
@@ -753,30 +734,44 @@ def _(
         y=train_data.select("income"),
     )
 
-    test_data = test_data.lazy().with_columns(
-        pl.struct(
-            "ability_motivation",
-            "education_institution",
-            "family_wealth",
-            "location",
-            "parents_education",
-            "test_scores",
-            "scholarship",
-            "population_log_income_mean",
-            "population_log_income_sd",
-        ).map_elements(
-            lambda row: simulate_cates(**row),
-            return_dtype=pl.Struct(
-                {
-                    "income_edu0": pl.Float64,
-                    "income_edu1": pl.Float64,
-                    "income_edu2": pl.Float64,
-                    "income_edu3": pl.Float64,
-                    "income_edu4": pl.Float64,
-                    "income_edu5": pl.Float64,
-                }
-            ),
+    TEST_DATA_SEED = 3141592
+    test_data = simulate_dag(
+        n=999,
+        seed=TEST_DATA_SEED,
+    )
+
+
+    test_data = (
+        test_data.lazy()
+        .with_columns(
+            pl.struct(
+                "ability_motivation",
+                "education_institution",
+                "family_wealth",
+                "location",
+                "parents_education",
+                "test_scores",
+                "scholarship",
+            )
+            .map_elements(
+                lambda row: mean_edu_incomes_via_simulation(
+                    n_sims=n_simulations.value, **row
+                ),
+                return_dtype=pl.Struct(
+                    {
+                        "income_do_edu0": pl.Float64,
+                        "income_do_edu1": pl.Float64,
+                        "income_do_edu2": pl.Float64,
+                        "income_do_edu3": pl.Float64,
+                        "income_do_edu4": pl.Float64,
+                        "income_do_edu5": pl.Float64,
+                    }
+                ),
+            )
+            .alias("sim")
         )
+        .unnest("sim")
+        .collect()
     )
 
     # result = (
@@ -1320,6 +1315,7 @@ def _(mo):
         include_var__survey_participation,
         include_var__test_scores,
         n_samples,
+        n_simulations,
         run_model_simulations,
     )
 
@@ -1864,19 +1860,22 @@ def _(Final, Literal, np, pl, softmax, truncnorm):
 
 
     def mean_edu_incomes_via_simulation(
+        n_sims: int,
         **kwargs,
     ) -> float:
-        # sim_results: pl.DataFrame =
-        return {
-            "income_edu0": -99,
-            "income_edu1": -99,
-            "income_edu2": -99,
-            "income_edu3": -99,
-            "income_edu4": -99,
-            "income_edu5": -99,
-        }
+        results: dict = {}
+        for i, edu_level in enumerate(EDUCATION_LEVELS):
+            sim_results: pl.DataFrame = simulate_dag(
+                n=n_sims,
+                education_level=edu_level,
+                **kwargs,
+            )
+            results[f"income_do_edu{i}"] = (
+                sim_results.select(pl.col("income")).mean().item()
+            )
+        return results
 
-    return EDUCATION_LEVELS, simulate_dag
+    return EDUCATION_LEVELS, mean_edu_incomes_via_simulation, simulate_dag
 
 
 if __name__ == "__main__":
