@@ -701,10 +701,12 @@ def _(mo):
 
 @app.cell
 def _(
+    EDUCATION_LEVELS: "Final[tuple[str, ...]]",
     mean_edu_incomes_via_simulation,
     mo,
     n_samples,
     n_simulations,
+    np,
     pl,
     run_model_simulations,
     simulate_dag,
@@ -713,14 +715,7 @@ def _(
 ):
     mo.stop(not run_model_simulations.value)
 
-    # mean_income_per_education_level = {
-    #    education_level: []  # 1 value stored for each simulation
-    #    for education_level in EDUCATION_LEVELS
-    # }
-
-    # all_datasets: list[pl.DataFrame] = []
-
-    train_data = simulate_dag(
+    train_data: pl.DataFrame = simulate_dag(
         n=n_samples.value,
         seed=271828,
     )
@@ -735,10 +730,26 @@ def _(
     )
 
     TEST_DATA_SEED = 3141592
-    test_data = simulate_dag(
+    test_data: pl.DataFrame = simulate_dag(
         n=999,
         seed=TEST_DATA_SEED,
     )
+
+    all_preds: list[np.ndarray] = []
+    for educ_level in EDUCATION_LEVELS:
+        temp_df: pl.DataFrame = test_data.with_columns(
+            pl.lit(educ_level)
+            .cast(train_data.schema["education_level"])
+            .alias("education_level")
+        ).select(vars_in_model + ["education_level"])
+        preds = model.predict(temp_df)
+        all_preds.append(
+            pl.Series(
+                name=f"pred_do_edu{educ_level}",
+                values=preds,
+            )
+        )
+    preds_df: pl.DataFrame = pl.DataFrame(all_preds)
 
 
     test_data = (
@@ -773,89 +784,12 @@ def _(
         .unnest("sim")
         .collect()
     )
-
-    # result = (
-    #    df.lazy()
-    #    .with_columns(
-    #        pl.struct("price", "quantity", "category")
-    #        .map_elements(
-    #            lambda row: calculate_outputs(**row),
-    #            return_dtype=output_dtype,
-    #        )
-    #        .alias("_calculated")
-    #    )
-    #    .unnest("_calculated")
-    #    .collect()
-    # )
-
-    # test_data_for_contrasts: dict[str, pl.DataFrame] = {}
-
-    # for education_level in EDUCATION_LEVELS:
-    #    test_data_for_contrasts[education_level] = simulate_dag(
-    #        n=len(test_data),
-    #        education_level=education_level,
-    #        seed=TEST_DATA_SEED,
-    #    )
-
-
-    # plot_df = pl.DataFrame(
-    #     [
-    #         {"education_level": level, "mean_income": value}
-    #         for level, values in mean_income_per_education_level.items()
-    #         for value in values
-    #     ]
-    # )
-
-    # simbase = alt.Chart(plot_df).encode(
-    #     x=alt.X(
-    #         "mean_income:Q",
-    #         bin=alt.Bin(maxbins=100),
-    #         title="Mean income",
-    #     ),
-    #     y=alt.Y("count():Q", title="Simulations"),
-    # )
-
-    # hist = simbase.mark_bar()
-
-    # mean_rule = (
-    #     alt.Chart(plot_df)
-    #     .transform_joinaggregate(
-    #         education_mean="mean(mean_income)",
-    #         groupby=["education_level"],
-    #     )
-    #     .mark_rule(strokeWidth=2)
-    #     .encode(
-    #         x=alt.X("education_mean:Q", title="Mean income"),
-    #         tooltip=[
-    #             "education_level:N",
-    #             alt.Tooltip("education_mean:Q", format=",.0f"),
-    #         ],
-    #     )
-    # )
-
-    # simchart = (
-    #     (hist + mean_rule)
-    #     .properties(
-    #         width=900,
-    #         height=60,
-    #     )
-    #     .facet(
-    #         row=alt.Row(
-    #             "education_level:N",
-    #             title=None,
-    #             sort=list(mean_income_per_education_level.keys()),
-    #         )
-    #     )
-    #     .resolve_scale(x="shared", y="independent")
-    # )
-
-    # mo.ui.altair_chart(simchart)
-    return (test_data,)
+    return (preds_df,)
 
 
 @app.cell(hide_code=True)
-def _(test_data):
-    test_data
+def _(preds_df: "pl.DataFrame"):
+    preds_df
     return
 
 
