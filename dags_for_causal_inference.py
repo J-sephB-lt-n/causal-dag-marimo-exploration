@@ -699,7 +699,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     EDUCATION_LEVELS: "Final[tuple[str, ...]]",
     mean_edu_incomes_via_simulation,
@@ -745,13 +745,13 @@ def _(
         preds = model.predict(temp_df)
         all_preds.append(
             pl.Series(
-                name=f"pred_do_edu{educ_level}",
+                name=f"pred_do_edu{educ_level[0]}",
                 values=preds,
             )
         )
-    preds_df: pl.DataFrame = pl.DataFrame(all_preds)
+    # preds_df: pl.DataFrame = pl.DataFrame(all_preds)
 
-
+    test_data = test_data.hstack(all_preds)
     test_data = (
         test_data.lazy()
         .with_columns(
@@ -784,12 +784,177 @@ def _(
         .unnest("sim")
         .collect()
     )
-    return (preds_df,)
+
+    test_data = test_data.with_row_index("id")
+
+    # get test data into a nice format for making plots #
+    pred_colnames: list[str] = [
+        c for c in test_data.columns if c.startswith("pred_do_")
+    ]
+    true_colnames: list[str] = [
+        c for c in test_data.columns if c.startswith("income_do_")
+    ]
+
+    pred_long = (
+        test_data.select(["id"] + pred_colnames)
+        .unpivot(
+            index="id",
+            on=pred_colnames,
+            variable_name="treatment",
+            value_name="pred_outcome",
+        )
+        .with_columns(pl.col("treatment").str.replace("^pred_do_", ""))
+    )
+
+    true_long = (
+        test_data.select(["id"] + true_colnames)
+        .unpivot(
+            index="id",
+            on=true_colnames,
+            variable_name="treatment",
+            value_name="true_outcome",
+        )
+        .with_columns(pl.col("treatment").str.replace("^income_do_", ""))
+    )
+
+    # join predicted and true long tables
+    test_data_long = pred_long.join(true_long, on=["id", "treatment"], how="inner")
+
+    baseline_outcomes_per_individual = test_data_long.filter(
+        pl.col("treatment") == "edu0"
+    ).select(
+        "id",
+        pl.col("pred_outcome").alias("pred_baseline"),
+        pl.col("true_outcome").alias("true_baseline"),
+    )
+
+    # attach baseline and compute effects/errors
+    test_data_long = (
+        test_data_long.join(baseline_outcomes_per_individual, on="id", how="left")
+        .with_columns(
+            (pl.col("pred_outcome") - pl.col("pred_baseline")).alias(
+                "pred_effect"
+            ),
+            (pl.col("true_outcome") - pl.col("true_baseline")).alias(
+                "true_effect"
+            ),
+        )
+        .with_columns(
+            (pl.col("pred_effect") - pl.col("true_effect")).alias("error")
+        )
+        .select(
+            "id",
+            "treatment",
+            "pred_outcome",
+            "true_outcome",
+            "pred_effect",
+            "true_effect",
+            "error",
+        )
+    )
+    return (test_data_long,)
 
 
 @app.cell(hide_code=True)
-def _(preds_df: "pl.DataFrame"):
-    preds_df
+def _(alt, pl, test_data_long):
+    long_effects = test_data_long.filter(pl.col("treatment") != "edu0")
+
+    treatments = (
+        long_effects.select("treatment")
+        .unique()
+        .sort("treatment")
+        .to_series()
+        .to_list()
+    )
+
+    plots = []
+
+    for t in treatments:
+        df_t = long_effects.filter(pl.col("treatment") == t)
+
+        # Per-panel x range
+        x_lo, x_hi = df_t.select(
+            pl.col("true_effect").min().alias("lo"),
+            pl.col("true_effect").max().alias("hi"),
+        ).row(0)
+
+        # Per-panel y range
+        y_lo, y_hi = df_t.select(
+            pl.min_horizontal("true_effect", "pred_effect").min().alias("lo"),
+            pl.max_horizontal("true_effect", "pred_effect").max().alias("hi"),
+        ).row(0)
+
+        diag_df = pl.DataFrame(
+            {
+                "x": [x_lo, x_hi],
+                "y": [x_lo, x_hi],
+            }
+        )
+
+        points = (
+            alt.Chart(df_t)
+            .mark_circle(size=25, opacity=0.5)
+            .encode(
+                x=alt.X(
+                    "true_effect:Q",
+                    title="True ITE",
+                    scale=alt.Scale(domain=[x_lo, x_hi]),
+                ),
+                y=alt.Y(
+                    "pred_effect:Q",
+                    title="Predicted ITE",
+                    scale=alt.Scale(domain=[y_lo, y_hi]),
+                ),
+                tooltip=[
+                    alt.Tooltip("id:Q"),
+                    alt.Tooltip("true_effect:Q", format=",.2f"),
+                    alt.Tooltip("pred_effect:Q", format=",.2f"),
+                    alt.Tooltip("error:Q", format=",.2f"),
+                ],
+            )
+        )
+
+        diagonal = (
+            alt.Chart(diag_df)
+            .mark_line(color="firebrick", strokeDash=[6, 4])
+            .encode(
+                x=alt.X("x:Q", scale=alt.Scale(domain=[x_lo, x_hi])),
+                y=alt.Y("y:Q", scale=alt.Scale(domain=[y_lo, y_hi])),
+            )
+        )
+
+        #    regression = (
+        #        alt.Chart(df_t)
+        #        .transform_regression("true_effect", "pred_effect")
+        #        .mark_line(color="black", size=2)
+        #        .encode(
+        #            x=alt.X("true_effect:Q", scale=alt.Scale(domain=[x_lo, x_hi])),
+        #            y=alt.Y("pred_effect:Q", scale=alt.Scale(domain=[y_lo, y_hi])),
+        #        )
+        #    )
+        regression = (
+            alt.Chart(df_t)
+            .transform_loess("true_effect", "pred_effect")
+            .mark_line(color="black", size=2)
+            .encode(
+                x=alt.X("true_effect:Q", scale=alt.Scale(domain=[x_lo, x_hi])),
+                y=alt.Y("pred_effect:Q", scale=alt.Scale(domain=[y_lo, y_hi])),
+            )
+        )
+
+        panel = alt.layer(points, diagonal, regression).properties(
+            width=700,
+            height=300,
+            title=f"Treatment: {t}",
+        )
+
+        plots.append(panel)
+
+    scatter_chart = alt.vconcat(*plots).properties(
+        title="Predicted vs True Individual Treatment Effects"
+    )
+
+    scatter_chart
     return
 
 
@@ -1193,6 +1358,7 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
+    include_var__ability_motivation = mo.ui.checkbox(label="Ability/Motivation")
     include_var__education_institution = mo.ui.checkbox(
         label="Most Recent Education Institution Attended"
     )
@@ -1224,6 +1390,7 @@ def _(mo):
     mo.vstack(
         [
             mo.md("## Variables to Include in Model"),
+            include_var__ability_motivation,
             include_var__education_institution,
             include_var__parents_education,
             include_var__family_wealth,
@@ -1239,6 +1406,7 @@ def _(mo):
         ]
     )
     return (
+        include_var__ability_motivation,
         include_var__education_institution,
         include_var__family_wealth,
         include_var__location,
@@ -1256,6 +1424,7 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(
+    include_var__ability_motivation,
     include_var__education_institution,
     include_var__family_wealth,
     include_var__location,
@@ -1268,6 +1437,7 @@ def _(
 ):
     vars_in_model: list[str] = []
     for vbl_name, checkbox in (
+        ("ability_motivation", include_var__ability_motivation),
         ("education_institution", include_var__education_institution),
         ("parents_education", include_var__parents_education),
         ("family_wealth", include_var__family_wealth),
@@ -1284,7 +1454,7 @@ def _(
     return (vars_in_model,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(pgmpy_dag):
     import pgmpy
     from pgmpy.identification import Adjustment
